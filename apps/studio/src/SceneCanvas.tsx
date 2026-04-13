@@ -319,7 +319,7 @@ function EdgeFlow({
   if (family === "transformer" && Math.abs(from[1] - to[1]) > 1.2) {
     const mid = [(from[0] + to[0]) / 2, Math.max(from[1], to[1]) + 1.5, (from[2] + to[2]) / 2] as [number, number, number];
     return (
-      <QuadraticBezierLine
+      <AnimatedBezier
         start={from}
         end={to}
         mid={mid}
@@ -331,7 +331,7 @@ function EdgeFlow({
     );
   }
 
-  return <Line points={[from, to]} color={color as any} lineWidth={width as any} transparent opacity={opacity as any} />;
+  return <AnimatedLine points={[from, to]} color={color as any} lineWidth={width as any} transparent opacity={opacity as any} />;
 }
 
 function NodeGlyph({
@@ -455,7 +455,7 @@ function AttentionRibbonLayer({ bundle, payload, selection, isFrozen }: { bundle
           const focused = selectedTokenId ? sourceNode.id === selectedTokenId || targetNode.id === selectedTokenId : false;
           const dimmed = Boolean(selectedTokenId) && !focused;
           return (
-            <QuadraticBezierLine
+            <AnimatedBezier
               key={`${sourceNode.id}-${targetNode.id}`}
               start={start}
               end={end}
