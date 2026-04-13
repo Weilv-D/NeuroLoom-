@@ -17,9 +17,8 @@ test.describe("NeuroLoom visual baselines", () => {
     await openTrace(page, "Tiny GPT Transformer", "Tiny GPT-style Transformer");
     await page.getByRole("button", { name: "Studio Mode" }).click();
     await page
-      .locator(".panel--right .focus-group")
-      .filter({ has: page.getByText("Tokens", { exact: true }) })
-      .locator(".focus-chip", { hasText: "glows" })
+      .getByTestId(/attention-token-/)
+      .filter({ hasText: "glows" })
       .click();
     await page.waitForTimeout(900);
     await expect(page.locator(".workspace")).toHaveScreenshot("transformer-studio-workspace.png");

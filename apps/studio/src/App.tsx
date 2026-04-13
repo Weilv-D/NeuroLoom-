@@ -758,6 +758,7 @@ function TransformerAttentionPanel({
               <button
                 key={head.id}
                 type="button"
+                data-testid={`attention-head-${head.id}`}
                 className={selectedHeadIndex === index ? "focus-chip is-active" : "focus-chip"}
                 onClick={() => setSelectedHeadIndex(index)}
               >
