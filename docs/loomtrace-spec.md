@@ -1,26 +1,28 @@
-# `.loomtrace` Specification
+# `.loomtrace` Profile For NeuroLoom
 
 Version: `1.0.0`
 
 ## Purpose
-`.loomtrace` is the replay bundle format used by NeuroLoom.
 
-It captures one controlled run of a supported model family and packages:
+NeuroLoom uses `.loomtrace` to replay a single `Qwen/Qwen3.5-0.8B` conversation after live generation has finished.
 
-- semantic graph structure
-- deterministic timeline frames
-- render-oriented payload slices
-- inspector-oriented payload slices
-- story chapters and camera anchors
+The archive stores:
 
-NeuroLoom v1 supports three families only:
+- structural graph anchors
+- token-step frames
+- render payloads for the starfield stage
+- inspect payloads for the side panels
+- chapter metadata for replay scrubbing
 
-- `mlp`
-- `cnn`
-- `transformer`
+NeuroLoom the product is single-model, but the archive still declares:
+
+- `family: transformer`
+
+This keeps the replay engine generic while the app remains Qwen-only.
 
 ## Archive Layout
-`.loomtrace` is a zip archive with these required entries:
+
+Required entries:
 
 ```text
 manifest.json
@@ -37,18 +39,19 @@ preview.webp
 ```
 
 ## `manifest.json`
-Top-level replay metadata.
+
+Example:
 
 ```json
 {
   "trace_version": "1.0.0",
-  "family": "mlp",
-  "model_id": "spiral-2d-mlp",
-  "dataset_id": "spiral-2d",
-  "title": "Spiral MLP",
-  "summary": "A compact multilayer perceptron learning a spiral decision boundary.",
-  "phase_set": ["forward", "loss", "backward", "update"],
-  "frame_count": 24,
+  "family": "transformer",
+  "model_id": "qwen3.5-0.8b-sample",
+  "dataset_id": "qwen-live-session",
+  "title": "Qwen3.5-0.8B Starfield Demo",
+  "summary": "Live-first replay for a single Qwen3.5-0.8B conversation.",
+  "phase_set": ["decode"],
+  "frame_count": 29,
   "camera_presets": [],
   "visual_semantics": {},
   "payload_catalog": [],
@@ -56,192 +59,157 @@ Top-level replay metadata.
 }
 ```
 
-Required fields:
+Key rules:
 
-- `trace_version`
-  Fixed to `1.0.0` in v1.
-- `family`
-  One of `mlp`, `cnn`, `transformer`.
-- `model_id`
-  Stable content identifier.
-- `dataset_id`
-  Stable dataset or prompt identifier.
-- `title`
-  Human-readable title.
-- `summary`
-  Short replay description.
-- `phase_set`
-  Subset of `forward`, `loss`, `backward`, `update`, `decode`.
-- `frame_count`
-  Must equal the number of lines in `timeline.ndjson`.
-- `camera_presets`
-  Ordered list of named camera anchors.
-- `visual_semantics`
-  The color and atmosphere vocabulary for the replay.
-- `payload_catalog`
-  Payload inventory. Each entry declares `id`, `kind`, `mimeType`, and archive `path`.
-- `narrative_ref`
-  Relative path to the narrative file, normally `narrative.json`.
+- `family` stays `transformer`
+- `phase_set` is currently `["decode"]`
+- `frame_count` equals the number of token frames in `timeline.ndjson`
+- payload catalog entries reference both `render` and `inspect` JSON payloads
 
 ## `graph.json`
-Semantic structure for one supported family.
+
+The graph describes the fixed Qwen stage.
+
+Node types used by NeuroLoom:
+
+- `token`
+- `embedding`
+- `residual`
+- `attention`
+- `delta`
+- `mlp`
+- `logits`
+- `decode`
+
+The `delta` node type is used for the recurrent memory lane visible in the Qwen starfield.
+
+Each block typically contributes:
+
+- one residual node
+- one attention node
+- one delta node
+- one FFN node
+
+Metadata carries Qwen-specific detail such as:
+
+- `lane`
+- `block`
+- `subtype`
+
+Example node:
 
 ```json
 {
-  "nodes": [
-    {
-      "id": "hidden-a",
-      "label": "H1-A",
-      "type": "linear",
-      "layerIndex": 1,
-      "order": 0,
-      "position": { "x": -2, "y": 2.2, "z": 0 },
-      "metadata": { "width": 16 }
-    }
-  ],
-  "edges": [
-    {
-      "id": "e-ha-ma",
-      "source": "hidden-a",
-      "target": "mix-a",
-      "type": "flow",
-      "weight": 1
-    }
-  ],
-  "rootNodeIds": ["input-x", "input-y"]
+  "id": "delta-07",
+  "label": "Delta 8",
+  "type": "delta",
+  "layerIndex": 9,
+  "order": 2,
+  "position": { "x": -3.94, "y": -2.25, "z": -0.42 },
+  "metadata": {
+    "lane": "delta",
+    "block": 7,
+    "subtype": "gated_deltanet"
+  }
 }
 ```
 
-Rules:
-
-- `id` values must be stable and unique.
-- `source` and `target` must reference existing nodes.
-- Node `type` must be valid for the declared `family`.
-
-Family-specific node type allowlists:
-
-- `mlp`
-  `input`, `linear`, `activation`, `output`, `loss`
-- `cnn`
-  `input`, `stage`, `conv`, `norm`, `activation`, `pool`, `dense`, `output`, `loss`
-- `transformer`
-  `token`, `embedding`, `attention`, `residual`, `mlp`, `norm`, `logits`, `loss`, `decode`
-
 ## `timeline.ndjson`
-One JSON object per line. Each line is a replay frame.
+
+Each line is one generated token.
+
+Example:
 
 ```json
 {
   "frame_id": 12,
-  "step": 2,
+  "step": 12,
   "substep": 0,
-  "phase": "backward",
-  "camera_anchor": "output-focus",
+  "phase": "decode",
+  "camera_anchor": "braid",
   "node_states": [],
   "edge_states": [],
   "metric_refs": [],
   "payload_refs": [],
-  "note": "Backward frames push the strongest pulse from the output head into earlier layers."
+  "note": "Token 13 ripples through grouped attention, DeltaNet memory, and the decode head."
 }
 ```
 
 Rules:
 
-- `frame_id` should be zero-based and contiguous.
-- `camera_anchor` must exist in `manifest.camera_presets`.
-- `node_states[].nodeId` must reference a graph node.
-- `edge_states[].edgeId` must reference a graph edge.
-- `payload_refs[]` should reference ids declared in `payload_catalog`.
+- one token = one frame
+- `frame_id` is zero-based and contiguous
+- `camera_anchor` must match a preset in `manifest.camera_presets`
+- `payload_refs` point to the render and inspect payloads for that token
 
-### `node_states`
-Each node state includes:
+## Payloads
 
-- `nodeId`
-- `activation`
-- `emphasis`
-- optional `payloadRef`
-
-`activation` is the signed scalar used by the renderer and inspector.
-`emphasis` is a normalized display strength in `[0, 1]`.
-
-### `edge_states`
-Each edge state includes:
-
-- `edgeId`
-- `intensity`
-- `direction`
-- `emphasis`
-
-`direction` is one of `forward`, `backward`, `neutral`.
-
-### `metric_refs`
-Inline frame-level metrics. Each metric includes:
-
-- `id`
-- `label`
-- `value`
-- optional `unit`
-
-## `payload/`
-Payloads are referenced from timeline frames and catalogued in `manifest.payload_catalog`.
-
-Kinds:
+NeuroLoom writes two JSON payloads per token:
 
 - `render`
-  Fast slices used by the main scene and visual overlays.
+  Fast payload for the stage
 - `inspect`
-  Higher-fidelity slices used by the inspector, notes, and detailed panels.
+  Full payload for the right-side panels and selection details
 
-V1 exporters use JSON payloads. Future versions may allow additional MIME types, but v1 Studio expects JSON for official content.
+### Render payload
+
+Contains:
+
+- headline
+- prompt
+- completion text so far
+- current token
+- token index
+- layer sweep
+- sampled units
+- top logits
+
+### Inspect payload
+
+Contains:
+
+- `token`
+- `tokenIndex`
+- `tokenWindow`
+- `completion`
+- `layerNorms`
+- `residualBands`
+- `headGroupScores`
+- `attentionRow`
+- `sampledUnits`
+- `topLogits`
+- `blockDigest`
+- `cameraAnchor`
+
+The important distinction is that `sampledUnits` are not decorative particles. They are the replayable star clusters that the stage uses to represent sampled internal structure.
 
 ## `narrative.json`
-Story Mode structure.
 
-```json
-{
-  "intro": "The replay starts wide, then narrows onto the decision plane and finally into the output head.",
-  "chapters": [
-    {
-      "id": "input-to-hidden",
-      "label": "Input Fan-Out",
-      "frameRange": [0, 6],
-      "defaultSelection": "hidden-a",
-      "description": "Forward pulses spread raw x/y features into the first hidden layer."
-    }
-  ]
-}
-```
+Replay chapters stay lightweight:
 
-Rules:
+- `Ingress`
+- `Braid`
+- `Decode`
 
-- `frameRange` must be valid within the timeline.
-- `defaultSelection`, when present, should reference a graph node.
+They give the scrubber stable jump points and default selections.
 
 ## Validation
-NeuroLoom validates a bundle in this order:
+
+Validation order:
 
 1. schema validation
-2. family semantic validation
+2. transformer node allowlist validation
 3. camera, node, edge, and payload reference validation
-4. narrative range validation
+4. narrative frame range validation
 
-If any step fails, the bundle is rejected before rendering.
-
-## CLI
 Validate one or more bundles:
 
 ```bash
-pnpm --filter @neuroloom/core loomtrace path/to/trace.loomtrace
+pnpm --filter @neuroloom/core loomtrace path/to/file.loomtrace
 ```
 
-## Design Constraints
-`.loomtrace` is intentionally not a generic runtime dump format.
+## Design Constraint
 
-It exists to support:
+This `.loomtrace` profile is intentionally narrow.
 
-- deterministic replay
-- renderer-specific semantics
-- visual consistency
-- stable story chapters
-
-It does not attempt to describe arbitrary model graphs outside the supported NeuroLoom families.
+It exists to preserve one Qwen live session as a deterministic replay artifact, not to become a universal runtime dump format.

@@ -1,46 +1,136 @@
 # NeuroLoom
 
-<p align="center">
-  <img src="./docs/workflow.svg" alt="NeuroLoom Workflow" width="100%">
-</p>
+NeuroLoom is a live-first visual stage for `Qwen/Qwen3.5-0.8B`.
 
-**NeuroLoom** is a cinematic, open-source 2.5D neural network execution replay interpreter. It reads controlled `.loomtrace` bundles and reconstructs modern miniature `MLP`, `CNN`, and decoder-only `Transformer` runs as replayable visual scenes.
+It turns a single text conversation into a dense starfield of residual flow, grouped attention, DeltaNet memory, and decode pressure. The same live session can then be exported as `.loomtrace` and replayed frame by frame.
 
-*Read this in other languages: [English](README.md), [简体中文](README_zh.md)*
+## What It Is
 
-## Key Features
+- One model only: `Qwen/Qwen3.5-0.8B`
+- One core experience: `live chat -> starfield -> replay export`
+- One visual language: dense star clusters, flowing arcs, logits waterfalls, and structural focus instead of abstract module boxes
 
-- **Micro SOTA Trace Generation**: Built-in definitions and exporters for modern, minimalistic architectures:
-  - **Tiny MLP-Mixer**: Token and channel mixing without convolutions.
-  - **Tiny ConvNeXt**: Modernized visual processing using depthwise convolutions.
-  - **Tiny Llama**: Feature-rich Transformer with RoPE (Rotary Positional Embeddings), GQA (Grouped-Query Attention), and SwiGLU.
-- **Cinematic Rendering**: 2.5D physical animations, frosted glass materials, and glowing refractions via React Three Fiber.
-- **Trace-Driven Replay**: Reconstructs deterministic execution graphs and tensors perfectly from `.loomtrace` binary files.
-- **Dual Presentation Modes**: *Story Mode* for narrative presentations and *Studio Mode* for frame-by-frame metric analysis.
-- **Deep Interaction**: Isolate and freeze neural nodes to inspect raw tensors, activations, and multi-head attention weights.
+NeuroLoom does not try to be a generic model debugger. It is a purpose-built stage for one Qwen profile.
 
-## Getting Started
+## Product Shape
 
-Make sure you have `Node.js 22+` and `pnpm 10+` installed. 
+- `Live mode`
+  A local runner starts a Qwen session, streams token-step events over WebSocket, and drives the stage in real time.
+- `Replay mode`
+  The same session can be exported as `.loomtrace`, reloaded locally, scrubbed on a timeline, and inspected without the runner.
+- `Starfield renderer`
+  Structural nodes are rendered as luminous star clusters. Sampled units appear as fine-grained stars around each block. Flow arcs pulse between them as tokens move through the model.
+
+## Monorepo Layout
+
+- `apps/studio`
+  React + Vite + React Three Fiber frontend for the live/replay stage.
+- `packages/core`
+  `.loomtrace` schema, archive I/O, validator, replay engine, and renderer contract.
+- `packages/official-traces`
+  Qwen-only session recorder, sample trace builder, and live event definitions.
+- `tools/exporters`
+  Generates the official fallback replay: `qwen3.5-0.8b-sample.loomtrace`.
+- `tools/runner`
+  Local NeuroLoom Runner with chat initiation, WebSocket live stream, and trace export.
+
+## Quick Start
+
+Requirements:
+
+- `Node.js 22+`
+- `pnpm 10+`
+
+Install and generate the official replay:
 
 ```bash
-# 1. Install dependencies
 pnpm install
-
-# 2. Build the workspace packages
-pnpm build
-
-# 3. Generate official SOTA traces (MLP-Mixer, ConvNeXt, Llama)
 pnpm generate:traces
+```
 
-# 4. Start the interactive 3D studio locally (defaults to http://localhost:5173)
+Run the frontend only:
+
+```bash
 pnpm dev
 ```
 
-## Structure
+Run the local live runner in another terminal:
 
-- `apps/studio`: The WebGL/React 19 replay studio frontend.
-- `packages/core`: The `.loomtrace` schema, validator, archive I/O, and replay engine.
-- `packages/official-traces`: Official graph layouts, per-frame payloads, and narrative content for the three supported families.
-- `tools/exporters`: Bundle generators that emit the official `.loomtrace` samples used by the studio.
-- `tools/model-training`: Optional PyTorch to ONNX experiments and intermediate extraction utilities.
+```bash
+pnpm dev:runner
+```
+
+Then open `http://localhost:5173`.
+
+If the runner is not available, the app falls back to the official replay bundle.
+
+## Local Runner
+
+The runner is the standard live transport for NeuroLoom.
+
+Endpoints:
+
+- `POST /v1/chat/completions`
+  Starts a new session from a prompt.
+- `WS /live/:sessionId`
+  Streams `session_started`, `token_step`, and `session_completed`.
+- `GET /sessions/:sessionId/trace`
+  Exports the finished session as `.loomtrace`.
+- `GET /health`
+  Reports runner status and mode.
+
+By default the runner uses a deterministic synthetic text source so the stage works immediately. If you provide an OpenAI-compatible backend, the runner can adapt a real text completion endpoint while still emitting NeuroLoom-specific live events.
+
+Environment variables:
+
+- `NEUROLOOM_RUNNER_PORT`
+- `NEUROLOOM_BACKEND_URL`
+- `NEUROLOOM_BACKEND_API_KEY`
+- `NEUROLOOM_BACKEND_MODEL`
+
+## `.loomtrace`
+
+NeuroLoom still uses `.loomtrace` as its replay bundle format.
+
+In this project the supported profile is intentionally narrow:
+
+- `family: transformer`
+- `model profile: Qwen3.5-0.8B`
+- live session = replay session
+- each generated token = one replay frame
+
+Each frame carries:
+
+- token text
+- layer norms
+- residual bands
+- grouped attention scores
+- attention row summary
+- sampled unit stars
+- top logits
+- camera anchor
+
+See [docs/loomtrace-spec.md](./docs/loomtrace-spec.md) for the profile details.
+
+## Commands
+
+```bash
+pnpm generate:traces
+pnpm validate:samples
+pnpm dev
+pnpm dev:runner
+pnpm build
+pnpm test
+pnpm test:visual
+```
+
+## Scope Boundary
+
+- Single-model only
+- Language-only only
+- Local runner first
+- Replay export preserved
+- No multi-model family switcher
+- No Story Mode / Studio Mode split
+- No browser ONNX rebuild path
+- No arbitrary runtime capture API

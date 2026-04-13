@@ -1,1372 +1,722 @@
-import type { TraceBundle, TraceFrame } from "@neuroloom/core";
-import { startTransition, useDeferredValue, useEffect, useId, useRef, useState } from "react";
-import { scaleLinear } from "d3-scale";
+import { createLoomTraceArchive, ReplayEngine, type TraceBundle, type TraceFrame } from "@neuroloom/core";
+import {
+  applyLiveTokenStep,
+  createQwenOfficialTraceBundle,
+  hydrateBundleFromLiveStart,
+  type QwenFramePayload,
+  type QwenTokenStepEvent,
+} from "@neuroloom/official-traces";
+import { startTransition, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { SceneCanvas } from "./SceneCanvas";
-
-const PLAYBACK_INTERVAL_MS = 520;
-import { officialTraces } from "./sampleTraces";
-import { type SelectionState, useStudioStore } from "./state";
+import { checkRunnerHealth, connectToSession, downloadTraceFromRunner, startChatSession, type RunnerHealth } from "./runnerClient";
+import { qwenSampleTrace } from "./sampleTraces";
 import { loadTraceFromFile, loadTraceFromUrl } from "./traceLoader";
-import { canRunOnnxModel, runOnnxInference } from "./onnxInference";
+import type { SelectionState } from "./types";
 
-type BrowserRuntimeState = {
-  label: string;
-  detail: string;
-  webgl: boolean;
-  webgpu: boolean;
-};
+const playbackIntervalMs = 160;
+const defaultPrompt =
+  "Explain how NeuroLoom should make a Qwen3.5-0.8B conversation feel like light moving through a dense starfield.";
+
+type SessionMode = "sample" | "connecting" | "live" | "replay";
 
 export function App() {
-  const {
-    mode,
-    traceId,
-    bundle,
-    engine,
-    loadingLabel,
-    error,
-    frameIndex,
-    playing,
-    selection,
-    frozenSelection,
-    activeChapterId,
-    setMode,
-    beginLoading,
-    finishLoading,
-    failLoading,
-    setFrameIndex,
-    step,
-    togglePlaying,
-    setPlaying,
-    setSelection,
-    toggleFreezeSelection,
-    clearFrozenSelection,
-    jumpToChapter,
-    regenerationProgress,
-    setRegenerationProgress,
-  } = useStudioStore();
   const uploadId = useId();
-  const stageFrameRef = useRef<HTMLDivElement | null>(null);
-  const [browserRuntime, setBrowserRuntime] = useState<BrowserRuntimeState | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const disconnectRef = useRef<(() => void) | null>(null);
+  const liveFollowRef = useRef(true);
 
-  async function ingestTrace(nextTraceId: string, loader: () => Promise<TraceBundle>) {
-    beginLoading(nextTraceId);
-    try {
-      const nextBundle = await loader();
-      startTransition(() => {
-        finishLoading(nextTraceId, nextBundle);
-      });
-    } catch (loadError) {
-      failLoading((loadError as Error).message);
-    }
-  }
-
-  async function regenerateOfficialTrace(targetTraceId: string) {
-    beginLoading(`${targetTraceId} (ONNX)`);
-    try {
-      const nextBundle = await runOnnxInference(targetTraceId, (progress) => {
-        setRegenerationProgress(progress);
-      });
-      startTransition(() => {
-        finishLoading(targetTraceId, nextBundle);
-      });
-    } catch (loadError) {
-      setRegenerationProgress(null);
-      failLoading((loadError as Error).message);
-    }
-  }
+  const [bundle, setBundle] = useState<TraceBundle | null>(null);
+  const [frameIndex, setFrameIndex] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [selection, setSelection] = useState<SelectionState>(null);
+  const [liveFollow, setLiveFollow] = useState(true);
+  const [runnerHealth, setRunnerHealth] = useState<RunnerHealth | null>(null);
+  const [runnerChecked, setRunnerChecked] = useState(false);
+  const [sessionMode, setSessionMode] = useState<SessionMode>("sample");
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [traceUrl, setTraceUrl] = useState<string | null>(null);
+  const [promptDraft, setPromptDraft] = useState(defaultPrompt);
+  const [activePrompt, setActivePrompt] = useState(defaultPrompt);
+  const [assistantText, setAssistantText] = useState("");
+  const [statusLine, setStatusLine] = useState("Loading the official Qwen replay…");
+  const [loadingLabel, setLoadingLabel] = useState<string | null>("Loading the official Qwen replay…");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (bundle || loadingLabel) return;
-    const firstTrace = officialTraces[0];
-    void ingestTrace(firstTrace.id, () => loadTraceFromUrl(firstTrace.path));
-  }, [bundle, loadingLabel]);
-
-  useEffect(() => {
-    if (!playing || !engine) return;
-    const intervalId = window.setInterval(() => {
-      const state = useStudioStore.getState();
-      if (!state.engine) return;
-      if (state.frameIndex >= state.engine.frameCount - 1) {
-        state.setPlaying(false);
-        return;
-      }
-      state.step(1);
-    }, PLAYBACK_INTERVAL_MS);
-
-    return () => window.clearInterval(intervalId);
-  }, [playing, engine]);
+    liveFollowRef.current = liveFollow;
+  }, [liveFollow]);
 
   useEffect(() => {
     let cancelled = false;
 
-    void detectBrowserRuntime().then((runtime) => {
-      if (!cancelled) {
-        setBrowserRuntime(runtime);
+    async function boot() {
+      setLoadingLabel("Loading the official Qwen replay…");
+      try {
+        const nextBundle = await loadTraceFromUrl(qwenSampleTrace.path);
+        if (cancelled) return;
+        setBundle(nextBundle);
+        setAssistantText(readLastCompletion(nextBundle));
+        setStatusLine("Demo replay ready. Start the local runner for live sessions.");
+      } catch {
+        const fallbackBundle = createQwenOfficialTraceBundle();
+        if (cancelled) return;
+        setBundle(fallbackBundle);
+        setAssistantText(readLastCompletion(fallbackBundle));
+        setStatusLine("Demo replay loaded from the bundled fallback trace.");
+      } finally {
+        if (!cancelled) {
+          setLoadingLabel(null);
+        }
       }
-    });
+
+      const health = await checkRunnerHealth();
+      if (!cancelled) {
+        setRunnerHealth(health);
+        setRunnerChecked(true);
+      }
+    }
+
+    void boot();
 
     return () => {
       cancelled = true;
+      disconnectRef.current?.();
     };
   }, []);
 
   useEffect(() => {
+    if (!playing || !bundle || bundle.timeline.length === 0) return;
+    const intervalId = window.setInterval(() => {
+      setFrameIndex((current) => {
+        const lastFrame = bundle.timeline.length - 1;
+        if (current >= lastFrame) {
+          setPlaying(false);
+          return current;
+        }
+        return current + 1;
+      });
+    }, playbackIntervalMs);
+
+    return () => window.clearInterval(intervalId);
+  }, [playing, bundle]);
+
+  useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
-      if (target && ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target.tagName)) {
+      if (target && ["TEXTAREA", "INPUT", "BUTTON", "SELECT"].includes(target.tagName)) {
         return;
       }
-      if (!useStudioStore.getState().engine) return;
+      if (!bundle || bundle.timeline.length === 0) return;
       if (event.key === " ") {
         event.preventDefault();
-        useStudioStore.getState().togglePlaying();
-        return;
-      }
-      if (event.key === "ArrowLeft") {
+        setPlaying((current) => !current);
+      } else if (event.key === "ArrowLeft") {
         event.preventDefault();
-        useStudioStore.getState().step(-1);
-        return;
-      }
-      if (event.key === "ArrowRight") {
+        stepFrame(-1);
+      } else if (event.key === "ArrowRight") {
         event.preventDefault();
-        useStudioStore.getState().step(1);
-        return;
-      }
-      if (event.key.toLowerCase() === "s") {
+        stepFrame(1);
+      } else if (event.key.toLowerCase() === "s") {
         event.preventDefault();
-        void exportStageSnapshot();
-        return;
-      }
-      if (event.key.toLowerCase() === "f") {
-        event.preventDefault();
-        useStudioStore.getState().toggleFreezeSelection();
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        const state = useStudioStore.getState();
-        if (state.frozenSelection) {
-          state.clearFrozenSelection();
-          return;
-        }
-        state.setSelection(null);
+        void exportPng();
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [bundle]);
 
-  const frame = engine ? engine.getFrame(frameIndex) : null;
-  const deferredFrame = useDeferredValue(frame);
-  const currentChapter =
-    bundle?.narrative.chapters.find((chapter) => chapter.id === activeChapterId) ??
-    (engine ? (engine.getChapterForFrame(frameIndex) ?? null) : null);
-  const activeTrace =
-    officialTraces.find((trace) => trace.id === traceId) ?? officialTraces.find((trace) => trace.family === bundle?.manifest.family);
-  const currentChapterIndex =
-    currentChapter && bundle ? bundle.narrative.chapters.findIndex((chapter) => chapter.id === currentChapter.id) : -1;
-  const renderPayloadId =
-    bundle && deferredFrame
-      ? (bundle.manifest.payload_catalog.find(
-          (entry) => deferredFrame.payload_refs.includes(entry.id) && (entry.kind === "render" || entry.kind === "inspect"),
-        )?.id ?? null)
-      : null;
-  const renderPayload = bundle && renderPayloadId ? parsePayload(bundle.payloads.get(renderPayloadId)) : null;
-  const sceneSelection = frozenSelection ?? selection;
-  const regenerationTarget = bundle?.manifest.model_id ?? traceId ?? null;
-  const canRegenerateInBrowser = regenerationTarget ? canRunOnnxModel(regenerationTarget) : false;
-  const frozenSelectionLabel = bundle && frozenSelection ? formatSelectionLabel(bundle, frozenSelection) : null;
+  const engine = useMemo(() => (bundle && bundle.timeline.length > 0 ? new ReplayEngine(bundle) : null), [bundle]);
+  const safeFrameIndex = bundle ? clamp(frameIndex, 0, Math.max(bundle.timeline.length - 1, 0)) : 0;
+  const frame = engine ? engine.getFrame(safeFrameIndex) : null;
+  const currentChapter = frame && engine ? engine.getChapterForFrame(safeFrameIndex) : bundle?.narrative.chapters[0] ?? null;
+  const currentPayload = bundle && frame ? getInspectPayload(bundle, frame) : null;
+  const currentMetrics = frame?.metric_refs ?? [];
+  const currentTokenIndex = currentPayload?.tokenIndex ?? null;
+  const currentTokenWindow = currentPayload?.tokenWindow ?? [];
+  const currentTopLogits = currentPayload?.topLogits ?? [];
+  const focusBlock = currentPayload ? currentPayload.tokenIndex % 24 : 0;
+  const focusDigest = currentPayload ? currentPayload.blockDigest.slice(Math.max(0, focusBlock - 2), Math.min(24, focusBlock + 3)) : [];
+  const selectionDetail = describeSelection({ bundle, frame, payload: currentPayload, selection });
+  const chapterIndex = currentChapter && bundle ? bundle.narrative.chapters.findIndex((chapter) => chapter.id === currentChapter.id) : -1;
 
-  async function exportStageSnapshot() {
-    const state = useStudioStore.getState();
-    const traceId = state.traceId;
-    const engine = state.engine;
-    const frameIndex = state.frameIndex;
-    if (!traceId || !engine) return;
-    const currentFrame = engine.getFrame(frameIndex);
-    if (!currentFrame) return;
+  function stepFrame(delta: number) {
+    if (!bundle || bundle.timeline.length === 0) return;
+    setFrameIndex((current) => clamp(current + delta, 0, bundle.timeline.length - 1));
+    setPlaying(false);
+    setLiveFollow(false);
+  }
 
-    const canvas = stageFrameRef.current?.querySelector("canvas");
+  async function loadSampleReplay() {
+    disconnectRef.current?.();
+    setLoadingLabel("Reloading the official Qwen replay…");
+    setError(null);
+    setSessionMode("sample");
+    setSessionId(null);
+    setTraceUrl(null);
+    try {
+      const nextBundle = await loadTraceFromUrl(qwenSampleTrace.path);
+      startTransition(() => {
+        setBundle(nextBundle);
+        setFrameIndex(0);
+        setSelection(null);
+        setAssistantText(readLastCompletion(nextBundle));
+        setActivePrompt(defaultPrompt);
+        setStatusLine("Demo replay ready. Start the local runner for live sessions.");
+      });
+    } catch {
+      const fallbackBundle = createQwenOfficialTraceBundle();
+      startTransition(() => {
+        setBundle(fallbackBundle);
+        setFrameIndex(0);
+        setSelection(null);
+        setAssistantText(readLastCompletion(fallbackBundle));
+        setActivePrompt(defaultPrompt);
+        setStatusLine("Demo replay loaded from the bundled fallback trace.");
+      });
+    } finally {
+      setLoadingLabel(null);
+    }
+  }
+
+  async function startLiveSession() {
+    if (!runnerHealth) {
+      setError("The local NeuroLoom Runner is not reachable. Start it first, then try again.");
+      return;
+    }
+
+    disconnectRef.current?.();
+    setError(null);
+    setPlaying(false);
+    setSelection(null);
+    setLiveFollow(true);
+    setLoadingLabel("Connecting to the local runner…");
+    setStatusLine("Creating a live Qwen session…");
+    setSessionMode("connecting");
+    setActivePrompt(promptDraft);
+    setAssistantText("");
+
+    try {
+      const response = await startChatSession(promptDraft);
+      setSessionId(response.neuroloom.session_id);
+      setTraceUrl(response.neuroloom.trace_url);
+      disconnectRef.current = connectToSession(response.neuroloom.session_id, {
+        onEvent(event) {
+          if (event.type === "session_started") {
+            startTransition(() => {
+              setBundle(hydrateBundleFromLiveStart(event));
+              setFrameIndex(0);
+              setSessionMode("live");
+              setStatusLine("Runner connected. Waiting for the first token pulse…");
+            });
+            return;
+          }
+
+          if (event.type === "token_step") {
+            handleTokenStep(event);
+            return;
+          }
+
+          setSessionMode("replay");
+          setLoadingLabel(null);
+          setStatusLine(`Live session completed in ${(event.durationMs / 1000).toFixed(1)}s. Replay is ready.`);
+        },
+        onError(message) {
+          setLoadingLabel(null);
+          setError(message);
+        },
+        onClose() {
+          setLoadingLabel(null);
+        },
+      });
+    } catch (startError) {
+      setLoadingLabel(null);
+      setSessionMode("sample");
+      setError((startError as Error).message);
+    }
+  }
+
+  function handleTokenStep(event: QwenTokenStepEvent) {
+    startTransition(() => {
+      setBundle((previous) => {
+        const base = previous ? cloneBundle(previous) : null;
+        if (!base) return previous;
+        return applyLiveTokenStep(base, event);
+      });
+      setAssistantText(event.completion);
+      setStatusLine(`Live token ${event.tokenIndex + 1} flowing through the stage.`);
+      setLoadingLabel(null);
+      if (liveFollowRef.current) {
+        setFrameIndex(event.frame.frame_id);
+      }
+    });
+  }
+
+  async function importTrace(file: File) {
+    setLoadingLabel(`Importing ${file.name}…`);
+    setError(null);
+    try {
+      const nextBundle = await loadTraceFromFile(file);
+      startTransition(() => {
+        setBundle(nextBundle);
+        setFrameIndex(0);
+        setSelection(null);
+        setSessionMode("replay");
+        setAssistantText(readLastCompletion(nextBundle));
+        setStatusLine(`Imported ${file.name}.`);
+      });
+    } catch (importError) {
+      setError((importError as Error).message);
+    } finally {
+      setLoadingLabel(null);
+    }
+  }
+
+  async function exportPng() {
+    const canvas = stageRef.current?.querySelector("canvas");
     if (!(canvas instanceof HTMLCanvasElement)) {
-      console.warn("Snapshot export failed: stage canvas is unavailable.");
+      setError("The stage canvas is unavailable for PNG export.");
       return;
     }
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) {
-      console.warn("Snapshot export failed: browser could not create a PNG.");
+      setError("The browser could not generate a PNG snapshot.");
       return;
     }
     const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `${traceId}-frame-${String(currentFrame.frame_id).padStart(3, "0")}.png`;
-    anchor.click();
+    triggerDownload(url, `qwen-starfield-frame-${String(safeFrameIndex).padStart(3, "0")}.png`);
     URL.revokeObjectURL(url);
+  }
+
+  async function exportReplay() {
+    try {
+      if (traceUrl && sessionMode !== "sample") {
+        const archive = await downloadTraceFromRunner(traceUrl);
+        triggerDownload(URL.createObjectURL(new Blob([archive], { type: "application/octet-stream" })), `${sessionId ?? "qwen-session"}.loomtrace`);
+        return;
+      }
+      if (!bundle) {
+        setError("There is no replay loaded to export.");
+        return;
+      }
+      const archive = await createLoomTraceArchive(bundle);
+      triggerDownload(URL.createObjectURL(new Blob([archive], { type: "application/octet-stream" })), `${bundle.manifest.model_id}.loomtrace`);
+    } catch (exportError) {
+      setError((exportError as Error).message);
+    }
+  }
+
+  function jumpToChapter(offset: number) {
+    if (!bundle || chapterIndex < 0) return;
+    const chapters = bundle.narrative.chapters;
+    const nextIndex = clamp(chapterIndex + offset, 0, chapters.length - 1);
+    const nextChapter = chapters[nextIndex];
+    if (!nextChapter) return;
+    setFrameIndex(nextChapter.frameRange[0]);
+    setPlaying(false);
+    setLiveFollow(false);
+    setSelection(nextChapter.defaultSelection ? { kind: "node", id: nextChapter.defaultSelection } : null);
   }
 
   return (
     <div className="app-shell">
-      <header className="hero">
-        <div className="hero-copy">
-          <p className="eyebrow">NeuroLoom v1</p>
-          <h1>Neural networks, replayed as a precise 2.5D stage.</h1>
+      <header className="app-header">
+        <div>
+          <p className="eyebrow">NeuroLoom</p>
+          <h1>Qwen3.5-0.8B, rendered as a live starfield.</h1>
           <p className="hero-text">
-            NeuroLoom is a replay-first explainer for <code>MLP</code>, <code>CNN</code>, and standard
-            <code> GPT-style Transformer</code> traces. It reconstructs one training or inference run into a controllable visual scene where
-            glow, motion, and numeric truth stay in sync.
+            A single-model stage for Qwen conversations. Live sessions stream into a dense field of residual light, grouped
+            attention, DeltaNet memory, and replayable decode traces.
           </p>
-          <div className="hero-definition">
-            <span>Definition</span>
-            <strong>NeuroLoom is a neural network replay explainer.</strong>
-          </div>
         </div>
-        <div className="hero-stats">
-          <StatCard label="Families" value="3 official" detail="MLP / CNN / Transformer" />
-          <StatCard label="Modes" value="Story + Studio" detail="Guided narrative and frame-by-frame analysis" />
-          <StatCard label="Input" value=".loomtrace" detail="Controlled replay bundle with schema validation" />
-        </div>
-      </header>
-
-      <section className="trace-library">
-        {officialTraces.map((trace) => (
-          <button
-            key={trace.id}
-            type="button"
-            className={`trace-card trace-card--${trace.accent} ${traceId === trace.id ? "is-active" : ""}`}
-            onClick={() => void ingestTrace(trace.id, () => loadTraceFromUrl(trace.path))}
-          >
-            <span className="trace-card__family">{trace.family}</span>
-            <strong>{trace.label}</strong>
-            <p>{trace.summary}</p>
-          </button>
-        ))}
-      </section>
-
-      <section className="toolbar">
-        <div className="toolbar__group">
-          <button type="button" className={mode === "story" ? "chip is-active" : "chip"} onClick={() => setMode("story")}>
-            Story Mode
-          </button>
-          <button type="button" className={mode === "studio" ? "chip is-active" : "chip"} onClick={() => setMode("studio")}>
-            Studio Mode
-          </button>
-        </div>
-        <div className="toolbar__group toolbar__group--meta">
-          {bundle ? (
-            <>
-              <span className="meta-pill">{bundle.manifest.title}</span>
-              <span className="meta-pill">{bundle.manifest.family}</span>
-              <span className="meta-pill">{bundle.manifest.frame_count} frames</span>
-              {frozenSelectionLabel ? <span className="meta-pill meta-pill--focus">Focus locked: {frozenSelectionLabel}</span> : null}
-            </>
-          ) : null}
-          {browserRuntime ? (
-            <span className="meta-pill meta-pill--runtime" title={browserRuntime.detail}>
-              {browserRuntime.label}
-            </span>
-          ) : null}
-        </div>
-        <div className="toolbar__group">
-          <button
-            type="button"
-            className={frozenSelection ? "chip is-active" : "chip"}
-            onClick={() => toggleFreezeSelection()}
-            disabled={!selection && !frozenSelection}
-          >
-            {frozenSelection ? "Unfreeze Focus" : "Freeze Focus"}
-          </button>
-          <button type="button" className="chip chip--ghost" onClick={() => clearFrozenSelection()} disabled={!frozenSelection}>
-            Clear Focus
-          </button>
-          <button
-            type="button"
-            className="chip"
-            onClick={() => {
-              if (!regenerationTarget || !canRegenerateInBrowser) return;
-              void regenerateOfficialTrace(regenerationTarget);
-            }}
-            disabled={!canRegenerateInBrowser}
-          >
-            Rebuild In Browser
-          </button>
-          <button type="button" className="chip" onClick={() => void exportStageSnapshot()} disabled={!bundle}>
-            Export PNG
-          </button>
-          <label htmlFor={uploadId} className="chip chip--file">
-            Import `.loomtrace`
-          </label>
-          <input
-            id={uploadId}
-            className="visually-hidden"
-            type="file"
-            accept=".loomtrace"
-            onChange={(event) => {
-              const file = event.currentTarget.files?.[0];
-              if (!file) return;
-              void ingestTrace(file.name, () => loadTraceFromFile(file));
-              event.currentTarget.value = "";
-            }}
-          />
-        </div>
-      </section>
-
-      {loadingLabel ? <div className="banner banner--info">Loading {loadingLabel}…</div> : null}
-      {regenerationProgress ? (
-        <div className="banner banner--progress">
-          Rebuilding {regenerationProgress.phase} — Frame {regenerationProgress.frame}/{regenerationProgress.total}
-        </div>
-      ) : null}
-      {error ? <div className="banner banner--error">{error}</div> : null}
-
-      {bundle && deferredFrame ? (
-        <main className="workspace">
-          <aside className="panel panel--left">
-            <section className="panel-section">
-              <header className="panel-section__header">
-                <span>Trace</span>
-                <strong>{bundle.manifest.summary}</strong>
-              </header>
-              <p className="muted-copy">{bundle.narrative.intro}</p>
-            </section>
-
-            {mode === "story" ? (
-              <>
-                <section className="panel-section">
-                  <header className="panel-section__header">
-                    <span>Narrative Track</span>
-                    <strong>{bundle.narrative.chapters.length} chapters</strong>
-                  </header>
-                  <div className="stack-list">
-                    {bundle.narrative.chapters.map((chapter, index) => (
-                      <button
-                        key={chapter.id}
-                        type="button"
-                        className={
-                          chapter.id === currentChapter?.id ? "stack-item is-active stack-item--story" : "stack-item stack-item--story"
-                        }
-                        onClick={() => jumpToChapter(chapter.id)}
-                      >
-                        <div>
-                          <span>{chapter.label}</span>
-                          <small>{chapter.description}</small>
-                        </div>
-                        <small>
-                          {index + 1}/{bundle.narrative.chapters.length}
-                        </small>
-                      </button>
-                    ))}
-                  </div>
-                </section>
-
-                {activeTrace ? (
-                  <section className="panel-section">
-                    <header className="panel-section__header">
-                      <span>Watch For</span>
-                      <strong>{activeTrace.family}</strong>
-                    </header>
-                    <p className="story-title">{activeTrace.storyTitle}</p>
-                    <KeyList items={activeTrace.watchFor} />
-                  </section>
-                ) : null}
-              </>
-            ) : (
-              <>
-                <section className="panel-section">
-                  <header className="panel-section__header">
-                    <span>Story Anchors</span>
-                    <strong>{bundle.narrative.chapters.length} stops</strong>
-                  </header>
-                  <div className="stack-list">
-                    {bundle.narrative.chapters.map((chapter) => (
-                      <button
-                        key={chapter.id}
-                        type="button"
-                        className={chapter.id === currentChapter?.id ? "stack-item is-active" : "stack-item"}
-                        onClick={() => jumpToChapter(chapter.id)}
-                      >
-                        <span>{chapter.label}</span>
-                        <small>
-                          {chapter.frameRange[0]}–{chapter.frameRange[1]}
-                        </small>
-                      </button>
-                    ))}
-                  </div>
-                </section>
-
-                <section className="panel-section">
-                  <header className="panel-section__header">
-                    <span>Structure</span>
-                    <strong>{bundle.graph.nodes.length} nodes</strong>
-                  </header>
-                  <StructureList bundle={bundle} selection={selection} onSelect={setSelection} />
-                </section>
-
-                {activeTrace ? (
-                  <section className="panel-section">
-                    <header className="panel-section__header">
-                      <span>Studio Tips</span>
-                      <strong>3 prompts</strong>
-                    </header>
-                    <KeyList items={activeTrace.studioTips} />
-                  </section>
-                ) : null}
-              </>
-            )}
-          </aside>
-
-          <section className="stage-column">
-            <div className={`stage-frame${frozenSelection ? " is-frozen" : ""}`} ref={stageFrameRef}>
-              <div className="stage-frame__overlay">
-                <div>
-                  <span className="overlay-label">Phase</span>
-                  <strong>{deferredFrame.phase}</strong>
-                </div>
-                <div>
-                  <span className="overlay-label">Step</span>
-                  <strong>
-                    {deferredFrame.step}.{deferredFrame.substep}
-                  </strong>
-                </div>
-                {currentChapter ? (
-                  <div>
-                    <span className="overlay-label">Chapter</span>
-                    <strong>{currentChapter.label}</strong>
-                  </div>
-                ) : null}
-                {frozenSelectionLabel ? (
-                  <div>
-                    <span className="overlay-label">Focus</span>
-                    <strong>{frozenSelectionLabel}</strong>
-                  </div>
-                ) : null}
-              </div>
-              <div className="stage-frame__lens">
-                <RenderLens payload={renderPayload} family={bundle.manifest.family} mode={mode} />
-              </div>
-              <div className="stage-frame__legend">
-                <LegendPill colorClass="is-electric" label="Activation / forward flow" />
-                <LegendPill colorClass="is-amber" label="Compression / backward pressure" />
-                <LegendPill colorClass="is-lime" label="Selection / frozen focus" />
-              </div>
-              <SceneCanvas bundle={bundle} frame={deferredFrame} selection={sceneSelection} isFrozen={!!frozenSelection} onSelect={setSelection} />
-            </div>
-            <TimelineBar
-              frame={deferredFrame}
-              frameIndex={frameIndex}
-              frameCount={bundle.manifest.frame_count}
-              playing={playing}
-              chapter={currentChapter?.label ?? null}
-              onSeek={setFrameIndex}
-              onPrev={() => step(-1)}
-              onNext={() => step(1)}
-              onTogglePlay={togglePlaying}
-              onExport={() => void exportStageSnapshot()}
-              onPrevChapter={() => {
-                if (!bundle || currentChapterIndex <= 0) return;
-                jumpToChapter(bundle.narrative.chapters[currentChapterIndex - 1]!.id);
-              }}
-              onNextChapter={() => {
-                if (!bundle || currentChapterIndex < 0 || currentChapterIndex >= bundle.narrative.chapters.length - 1) return;
-                jumpToChapter(bundle.narrative.chapters[currentChapterIndex + 1]!.id);
-              }}
-            />
-          </section>
-
-          <aside className="panel panel--right">
-            {mode === "story" ? (
-              <StoryPanel
-                bundle={bundle}
-                frame={deferredFrame}
-                chapter={currentChapter}
-                activeTraceTitle={activeTrace?.storyTitle ?? null}
-                watchFor={activeTrace?.watchFor ?? []}
-              />
-            ) : (
-              <InspectorPanel
-                bundle={bundle}
-                frame={deferredFrame}
-                selection={sceneSelection}
-                chapter={currentChapter?.description ?? null}
-                activeTrace={activeTrace ?? null}
-                onSelect={setSelection}
-              />
-            )}
-          </aside>
-        </main>
-      ) : null}
-    </div>
-  );
-}
-
-function StatCard({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <article className="stat-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <p>{detail}</p>
-    </article>
-  );
-}
-
-function TimelineBar({
-  frame,
-  frameIndex,
-  frameCount,
-  playing,
-  chapter,
-  onSeek,
-  onPrev,
-  onNext,
-  onTogglePlay,
-  onExport,
-  onPrevChapter,
-  onNextChapter,
-}: {
-  frame: TraceFrame;
-  frameIndex: number;
-  frameCount: number;
-  playing: boolean;
-  chapter: string | null;
-  onSeek(index: number): void;
-  onPrev(): void;
-  onNext(): void;
-  onTogglePlay(): void;
-  onExport(): void;
-  onPrevChapter(): void;
-  onNextChapter(): void;
-}) {
-  return (
-    <div className="timeline">
-      <div className="timeline__controls">
-        <button type="button" className="chip" onClick={onPrev}>
-          Prev
-        </button>
-        <button type="button" className="chip chip--play" onClick={onTogglePlay}>
-          {playing ? "Pause" : "Play"}
-        </button>
-        <button type="button" className="chip" onClick={onNext}>
-          Next
-        </button>
-        <button type="button" className="chip" onClick={onExport}>
-          PNG
-        </button>
-      </div>
-      <div className="timeline__track">
-        <input
-          type="range"
-          min={0}
-          max={frameCount - 1}
-          value={frameIndex}
-          onChange={(event) => onSeek(Number(event.currentTarget.value))}
-        />
-        <div className="timeline__meta">
-          <span>
-            Frame {frame.frame_id + 1} / {frameCount}
+        <div className="header-badges">
+          <span className="status-pill status-pill--accent">{qwenSampleTrace.label}</span>
+          <span className="status-pill">{bundle?.timeline.length ?? 0} frames</span>
+          <span className={`status-pill ${runnerHealth ? "status-pill--live" : "status-pill--muted"}`}>
+            {runnerHealth ? `Runner ${runnerHealth.mode}` : runnerChecked ? "Runner offline" : "Runner probing"}
           </span>
-          <span>{chapter ?? "Free scrub"}</span>
-          <span className="timeline__hotkeys">`Space` play · `←/→` step · `S` export · `F` freeze · `Esc` clear</span>
-          <div className="timeline__chapter-nav">
-            <button type="button" className="chip chip--ghost" onClick={onPrevChapter}>
-              Prev Chapter
-            </button>
-            <button type="button" className="chip chip--ghost" onClick={onNextChapter}>
-              Next Chapter
-            </button>
-          </div>
+          <span className={`status-pill ${sessionMode === "live" ? "status-pill--live" : ""}`}>{sessionMode}</span>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function StructureList({
-  bundle,
-  selection,
-  onSelect,
-}: {
-  bundle: TraceBundle;
-  selection: SelectionState;
-  onSelect(selection: SelectionState): void;
-}) {
-  const layerIndexes = Array.from(new Set(bundle.graph.nodes.map((node) => node.layerIndex))).sort((left, right) => left - right);
-
-  return (
-    <div className="layer-groups">
-      {layerIndexes.map((layerIndex) => (
-        <div key={layerIndex} className="layer-group">
-          <span className="layer-group__label">Layer {layerIndex}</span>
-          {bundle.graph.nodes
-            .filter((node) => node.layerIndex === layerIndex)
-            .sort((left, right) => left.order - right.order)
-            .map((node) => (
-              <button
-                key={node.id}
-                type="button"
-                className={selection?.id === node.id ? "structure-pill is-active" : "structure-pill"}
-                onClick={() => onSelect({ id: node.id, kind: "node" })}
-              >
-                <span>{node.label}</span>
-                <small>{node.type}</small>
-              </button>
-            ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function InspectorPanel({
-  bundle,
-  frame,
-  selection,
-  chapter,
-  activeTrace,
-  onSelect,
-}: {
-  bundle: TraceBundle;
-  frame: TraceFrame;
-  selection: SelectionState;
-  chapter: string | null;
-  activeTrace: (typeof officialTraces)[number] | null;
-  onSelect(selection: SelectionState): void;
-}) {
-  const inspectPayloadId =
-    bundle.manifest.payload_catalog.find((entry) => entry.kind === "inspect" && frame.payload_refs.includes(entry.id))?.id ?? null;
-  const inspectPayload = inspectPayloadId ? parsePayload(bundle.payloads.get(inspectPayloadId)) : null;
-  const selectedDetail =
-    selection?.kind === "node" && inspectPayload && typeof inspectPayload === "object" && "selectionDetails" in inspectPayload
-      ? (inspectPayload.selectionDetails as any)?.[selection.id]
-      : null;
-
-  return (
-    <>
-      <FamilyFocusPanel bundle={bundle} selection={selection} onSelect={onSelect} payload={inspectPayload} activeTrace={activeTrace} />
-
-      <section className="panel-section">
-        <header className="panel-section__header">
-          <span>Narrative Notes</span>
-          <strong>{chapter ? "Current chapter" : "Frame note"}</strong>
-        </header>
-        <p className="muted-copy">{chapter ?? frame.note ?? "No note for this frame."}</p>
-      </section>
-
-      <section className="panel-section">
-        <header className="panel-section__header">
-          <span>Frame Metrics</span>
-          <strong>{frame.metric_refs.length} values</strong>
-        </header>
-        <div className="metric-grid">
-          {frame.metric_refs.map((metric) => (
-            <article key={metric.id} className="metric-card">
-              <span>{metric.label}</span>
-              <strong>{formatMetric(metric.value)}</strong>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="panel-section">
-        <header className="panel-section__header">
-          <span>Tensor Slice</span>
-          <strong>{(inspectPayload?.headline as string) ?? "No payload"}</strong>
-        </header>
-        {inspectPayload ? <PayloadView payload={inspectPayload} /> : <p className="muted-copy">No inspect payload.</p>}
-      </section>
-
-      {bundle.manifest.family === "mlp" ? <MlpBoundaryPanel payload={inspectPayload} /> : null}
-      {bundle.manifest.family === "cnn" ? <CnnFeaturePanel payload={inspectPayload} onSelect={onSelect} /> : null}
-
-      {bundle.manifest.family === "transformer" ? (
-        <TransformerAttentionPanel bundle={bundle} payload={inspectPayload} selection={selection} onSelect={onSelect} />
-      ) : null}
-
-      <section className="panel-section">
-        <header className="panel-section__header">
-          <span>Structure</span>
-          <strong>{selection ? selection.id : "Nothing selected"}</strong>
-        </header>
-        {selectedDetail ? (
-          <div className="detail-card">
-            <strong>{selectedDetail.title}</strong>
-            <p>{selectedDetail.blurb}</p>
-            <div className="detail-stats">
-              {selectedDetail.stats.map((stat: { label: string; value: number }) => (
-                <div key={stat.label} className="detail-stat">
-                  <span>{stat.label}</span>
-                  <strong>{formatMetric(stat.value)}</strong>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <p className="muted-copy">Select a node to inspect family-specific details.</p>
-        )}
-      </section>
-    </>
-  );
-}
-
-function TransformerAttentionPanel({
-  bundle,
-  payload,
-  selection,
-  onSelect,
-}: {
-  bundle: TraceBundle;
-  payload: Record<string, unknown> | null;
-  selection: SelectionState;
-  onSelect(selection: SelectionState): void;
-}) {
-  const heads = Array.isArray(payload?.heads)
-    ? payload.heads.flatMap((head) => {
-        if (!head || typeof head !== "object") return [];
-        const id = "id" in head && typeof head.id === "string" ? head.id : "head";
-        const label = "label" in head && typeof head.label === "string" ? head.label : id;
-        const matrix = "matrix" in head && Array.isArray(head.matrix) ? (head.matrix as number[][]) : [];
-        const focusTokenIndex = "focusTokenIndex" in head && typeof head.focusTokenIndex === "number" ? head.focusTokenIndex : 0;
-        const score = "score" in head && typeof head.score === "number" ? head.score : null;
-        return [{ id, label, matrix, focusTokenIndex, score }];
-      })
-    : [];
-  const tokens = Array.isArray(payload?.tokens) ? payload.tokens.filter((entry): entry is string => typeof entry === "string") : [];
-  const topTokens = Array.isArray(payload?.topTokens)
-    ? payload.topTokens.flatMap((entry) => {
-        if (!entry || typeof entry !== "object") return [];
-        const token = "token" in entry && typeof entry.token === "string" ? entry.token : null;
-        const probability = "probability" in entry && typeof entry.probability === "number" ? entry.probability : null;
-        return token && probability !== null ? [{ token, probability }] : [];
-      })
-    : [];
-  const [selectedHeadIndex, setSelectedHeadIndex] = useState(0);
-  const [selectedTokenIndex, setSelectedTokenIndex] = useState(0);
-
-  useEffect(() => {
-    setSelectedHeadIndex(0);
-  }, [bundle.manifest.model_id, payload?.headline]);
-
-  useEffect(() => {
-    if (heads.length === 0) return;
-    const suggestedToken = heads[selectedHeadIndex]?.focusTokenIndex ?? 0;
-    setSelectedTokenIndex(Math.max(0, Math.min(suggestedToken, Math.max(tokens.length - 1, 0))));
-  }, [selectedHeadIndex, heads.length, payload?.headline, tokens.length]);
-
-  const selectedHead = heads[Math.min(selectedHeadIndex, Math.max(heads.length - 1, 0))] ?? null;
-  const selectedToken = tokens[Math.min(selectedTokenIndex, Math.max(tokens.length - 1, 0))] ?? null;
-  const tokenNodes = bundle.graph.nodes.filter((node) => node.type === "token").sort((left, right) => left.order - right.order);
-  const selectedRow =
-    selectedHead && selectedHead.matrix[selectedTokenIndex]
-      ? selectedHead.matrix[selectedTokenIndex]!.map((value, index) => ({
-          token: tokens[index] ?? `token-${index}`,
-          value,
-        }))
-      : [];
-
-  return (
-    <section className="panel-section">
-      <header className="panel-section__header">
-        <span>Attention Explorer</span>
-        <strong>{selectedHead?.label ?? "No head"}</strong>
       </header>
-      <div className="focus-groups">
-        <div className="focus-group">
-          <span className="focus-group__label">Heads</span>
-          <div className="focus-group__chips">
-            {heads.map((head, index) => (
-              <button
-                key={head.id}
-                type="button"
-                data-testid={`attention-head-${head.id}`}
-                className={selectedHeadIndex === index ? "focus-chip is-active" : "focus-chip"}
-                onClick={() => setSelectedHeadIndex(index)}
-              >
-                {head.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="focus-group">
-          <span className="focus-group__label">Tokens</span>
-          <div className="focus-group__chips">
-            {tokenNodes.map((node, index) => (
-              <button
-                key={node.id}
-                type="button"
-                data-testid={`attention-token-${node.id}`}
-                className={selectedTokenIndex === index || selection?.id === node.id ? "focus-chip is-active" : "focus-chip"}
-                onClick={() => {
-                  setSelectedTokenIndex(index);
-                  onSelect({ id: node.id, kind: "node" });
-                }}
-              >
-                {node.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-      {selectedHead ? (
-        <div className="family-slice">
-          <div className="family-slice__meta">
-            <span>{selectedToken ? `${selectedHead.label} on ${selectedToken}` : selectedHead.label}</span>
-            <strong>{selectedHead.score !== null ? formatMetric(selectedHead.score) : "focused row"}</strong>
-          </div>
-          <MatrixHeatmap matrix={selectedHead.matrix} />
-        </div>
-      ) : null}
-      {selectedRow.length > 0 ? (
-        <div className="token-bars">
-          {selectedRow.map((entry) => (
-            <div key={entry.token} className="token-bars__item">
-              <div className="token-bars__meta">
-                <span>{entry.token}</span>
-                <strong>{formatMetric(entry.value)}</strong>
-              </div>
-              <div className="series-bar__track">
-                <div className="series-bar__fill" style={{ width: `${Math.max(6, entry.value * 100)}%` }} />
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {topTokens.length > 0 ? (
-        <div className="detail-card">
-          <strong>Decode candidates</strong>
-          <div className="detail-stats">
-            {topTokens.map((entry) => (
-              <div key={entry.token} className="detail-stat">
-                <span>{entry.token}</span>
-                <strong>{formatMetric(entry.probability)}</strong>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </section>
-  );
-}
 
-function MlpBoundaryPanel({ payload }: { payload: Record<string, unknown> | null }) {
-  const snapshots = Array.isArray(payload?.boundarySnapshots)
-    ? payload.boundarySnapshots.flatMap((snapshot) => {
-        if (!snapshot || typeof snapshot !== "object") return [];
-        const id = "id" in snapshot && typeof snapshot.id === "string" ? snapshot.id : "snapshot";
-        const label = "label" in snapshot && typeof snapshot.label === "string" ? snapshot.label : id;
-        const matrix = "matrix" in snapshot && Array.isArray(snapshot.matrix) ? (snapshot.matrix as number[][]) : [];
-        return [{ id, label, matrix }];
-      })
-    : [];
-  const regions = Array.isArray(payload?.regions)
-    ? payload.regions.flatMap((entry) => {
-        if (!entry || typeof entry !== "object") return [];
-        const label = "label" in entry && typeof entry.label === "string" ? entry.label : null;
-        const value = "value" in entry && typeof entry.value === "number" ? entry.value : null;
-        return label && value !== null ? [{ label, value }] : [];
-      })
-    : [];
-  const [selectedSnapshotIndex, setSelectedSnapshotIndex] = useState(0);
-  const selectedSnapshot = snapshots[Math.min(selectedSnapshotIndex, Math.max(snapshots.length - 1, 0))] ?? null;
-
-  return (
-    <section className="panel-section">
-      <header className="panel-section__header">
-        <span>Decision Boundary</span>
-        <strong>{selectedSnapshot?.label ?? "No snapshot"}</strong>
-      </header>
-      <div className="focus-group__chips">
-        {snapshots.map((snapshot, index) => (
-          <button
-            key={snapshot.id}
-            type="button"
-            className={selectedSnapshotIndex === index ? "focus-chip is-active" : "focus-chip"}
-            onClick={() => setSelectedSnapshotIndex(index)}
-          >
-            {snapshot.label}
-          </button>
-        ))}
-      </div>
-      {selectedSnapshot ? (
-        <div className="family-slice">
-          <div className="family-slice__meta">
-            <span>Boundary slice</span>
-            <strong>{selectedSnapshot.label}</strong>
-          </div>
-          <MatrixHeatmap matrix={selectedSnapshot.matrix} />
-        </div>
-      ) : null}
-      {regions.length > 0 ? (
-        <div className="token-bars">
-          {regions.map((region) => (
-            <div key={region.label} className="token-bars__item">
-              <div className="token-bars__meta">
-                <span>{region.label}</span>
-                <strong>{formatMetric(region.value)}</strong>
-              </div>
-              <div className="series-bar__track">
-                <div className="series-bar__fill" style={{ width: `${Math.max(6, region.value * 100)}%` }} />
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function CnnFeaturePanel({ payload, onSelect }: { payload: Record<string, unknown> | null; onSelect(selection: SelectionState): void }) {
-  const stages = Array.isArray(payload?.stages)
-    ? payload.stages.flatMap((stage) => {
-        if (!stage || typeof stage !== "object") return [];
-        const id = "id" in stage && typeof stage.id === "string" ? stage.id : "stage";
-        const label = "label" in stage && typeof stage.label === "string" ? stage.label : id;
-        const matrix = "matrix" in stage && Array.isArray(stage.matrix) ? (stage.matrix as number[][]) : [];
-        const channels =
-          "channels" in stage && Array.isArray(stage.channels)
-            ? stage.channels.flatMap((channel: any) => {
-                if (!channel || typeof channel !== "object") return [];
-                const channelId = "id" in channel && typeof channel.id === "string" ? channel.id : "channel";
-                const channelLabel = "label" in channel && typeof channel.label === "string" ? channel.label : channelId;
-                const nodeId = "nodeId" in channel && typeof channel.nodeId === "string" ? channel.nodeId : null;
-                const channelMatrix = "matrix" in channel && Array.isArray(channel.matrix) ? (channel.matrix as number[][]) : [];
-                const score = "score" in channel && typeof channel.score === "number" ? channel.score : null;
-                return [{ id: channelId, label: channelLabel, nodeId, matrix: channelMatrix, score }];
-              })
-            : [];
-        return [{ id, label, matrix, channels }];
-      })
-    : [];
-  const topClasses = Array.isArray(payload?.topClasses)
-    ? payload.topClasses.flatMap((entry) => {
-        if (!entry || typeof entry !== "object") return [];
-        const label = "label" in entry && typeof entry.label === "string" ? entry.label : null;
-        const value = "value" in entry && typeof entry.value === "number" ? entry.value : null;
-        return label && value !== null ? [{ label, value }] : [];
-      })
-    : [];
-  const [selectedStageIndex, setSelectedStageIndex] = useState(0);
-  const selectedStage = stages[Math.min(selectedStageIndex, Math.max(stages.length - 1, 0))] ?? null;
-  const [selectedChannelIndex, setSelectedChannelIndex] = useState(0);
-  const selectedChannel =
-    selectedStage?.channels[Math.min(selectedChannelIndex, Math.max((selectedStage?.channels.length ?? 1) - 1, 0))] ?? null;
-
-  useEffect(() => {
-    setSelectedChannelIndex(0);
-  }, [selectedStageIndex, payload?.headline]);
-
-  return (
-    <section className="panel-section">
-      <header className="panel-section__header">
-        <span>Feature Explorer</span>
-        <strong>{selectedStage?.label ?? "No stage"}</strong>
-      </header>
-      <div className="focus-group">
-        <span className="focus-group__label">Stages</span>
-        <div className="focus-group__chips">
-          {stages.map((stage, index) => (
-            <button
-              key={stage.id}
-              type="button"
-              className={selectedStageIndex === index ? "focus-chip is-active" : "focus-chip"}
-              onClick={() => {
-                setSelectedStageIndex(index);
-                onSelect({ id: stage.id, kind: "node" });
+      <main className="workspace">
+        <aside className="panel panel--left">
+          <section className="card">
+            <p className="eyebrow">Session Prompt</p>
+            <form
+              className="prompt-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void startLiveSession();
               }}
             >
-              {stage.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      {selectedStage ? (
-        <div className="family-slice">
-          <div className="family-slice__meta">
-            <span>Stage map</span>
-            <strong>{selectedStage.label}</strong>
-          </div>
-          <MatrixHeatmap matrix={selectedStage.matrix} />
-        </div>
-      ) : null}
-      {selectedStage?.channels.length ? (
-        <div className="focus-group">
-          <span className="focus-group__label">Channels</span>
-          <div className="focus-group__chips">
-            {selectedStage.channels.map((channel: any, index: number) => (
-              <button
-                key={channel.id}
-                type="button"
-                className={selectedChannelIndex === index ? "focus-chip is-active" : "focus-chip"}
-                onClick={() => {
-                  setSelectedChannelIndex(index);
-                  if (channel.nodeId) onSelect({ id: channel.nodeId, kind: "node" });
-                }}
-              >
-                {channel.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      {selectedChannel ? (
-        <div className="family-slice">
-          <div className="family-slice__meta">
-            <span>Channel response</span>
-            <strong>{selectedChannel.score !== null ? formatMetric(selectedChannel.score) : selectedChannel.label}</strong>
-          </div>
-          <MatrixHeatmap matrix={selectedChannel.matrix} />
-        </div>
-      ) : null}
-      {topClasses.length > 0 ? (
-        <div className="detail-card">
-          <strong>Top classes</strong>
-          <div className="detail-stats">
-            {topClasses.map((entry) => (
-              <div key={entry.label} className="detail-stat">
-                <span>{entry.label}</span>
-                <strong>{formatMetric(entry.value)}</strong>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function FamilyFocusPanel({
-  bundle,
-  selection,
-  onSelect,
-  payload,
-  activeTrace,
-}: {
-  bundle: TraceBundle;
-  selection: SelectionState;
-  onSelect(selection: SelectionState): void;
-  payload: Record<string, unknown> | null;
-  activeTrace: (typeof officialTraces)[number] | null;
-}) {
-  const groups = getFamilyFocusGroups(bundle);
-  const matrix = Array.isArray(payload?.matrix) ? (payload.matrix as number[][]) : null;
-  const headline = typeof payload?.headline === "string" ? payload.headline : bundle.manifest.title;
-
-  return (
-    <section className="panel-section">
-      <header className="panel-section__header">
-        <span>Family Focus</span>
-        <strong>{bundle.manifest.family}</strong>
-      </header>
-      <p className="muted-copy">
-        {activeTrace?.studioTips[0] ?? "Use these shortcuts to jump between the most meaningful nodes for this model family."}
-      </p>
-      <div className="focus-groups">
-        {groups.map((group) => (
-          <div key={group.label} className="focus-group">
-            <span className="focus-group__label">{group.label}</span>
-            <div className="focus-group__chips">
-              {group.items.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={selection?.id === item.id ? "focus-chip is-active" : "focus-chip"}
-                  onClick={() => onSelect({ id: item.id, kind: "node" })}
-                >
-                  {item.label}
+              <textarea
+                value={promptDraft}
+                onChange={(event) => setPromptDraft(event.target.value)}
+                placeholder="Ask the runner for a live Qwen session…"
+                rows={7}
+              />
+              <div className="prompt-actions">
+                <button type="submit" className="primary-button" disabled={!runnerHealth || Boolean(loadingLabel)}>
+                  Start Live Session
                 </button>
+                <button type="button" className="secondary-button" onClick={() => void loadSampleReplay()}>
+                  Load Demo Replay
+                </button>
+              </div>
+            </form>
+            <div className="status-list">
+              <div>
+                <span>Transport</span>
+                <strong>{runnerHealth ? `local runner · ${runnerHealth.mode}` : "replay fallback"}</strong>
+              </div>
+              <div>
+                <span>Model</span>
+                <strong>{runnerHealth?.model ?? qwenSampleTrace.model}</strong>
+              </div>
+              <div>
+                <span>Status</span>
+                <strong>{statusLine}</strong>
+              </div>
+            </div>
+            {error ? <p className="error-text">{error}</p> : null}
+            {loadingLabel ? <p className="loading-text">{loadingLabel}</p> : null}
+          </section>
+
+          <section className="card">
+            <p className="eyebrow">Conversation</p>
+            <div className="message message--user">
+              <span className="message-role">User</span>
+              <p>{activePrompt}</p>
+            </div>
+            <div className="message message--assistant">
+              <span className="message-role">Qwen</span>
+              <p>{assistantText || "No tokens yet. Start a live session or load the demo replay."}</p>
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="card-heading">
+              <p className="eyebrow">Token Window</p>
+              <span>{currentTokenWindow.length} tokens</span>
+            </div>
+            <div className="token-cloud">
+              {currentTokenWindow.length === 0 ? <span className="empty-state">Waiting for token flow.</span> : null}
+              {currentTokenWindow.map((token, index) => {
+                const absoluteIndex = (currentPayload?.tokenIndex ?? 0) - currentTokenWindow.length + index + 1;
+                const tokenId = `token-${absoluteIndex}`;
+                const isActive = selection?.kind === "token" && selection.id === tokenId;
+                return (
+                  <button
+                    key={tokenId}
+                    type="button"
+                    className={isActive ? "token-pill token-pill--active" : "token-pill"}
+                    onClick={() => setSelection({ kind: "token", id: tokenId })}
+                  >
+                    {token}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        </aside>
+
+        <section className="center-column">
+          <section className="stage-card" ref={stageRef}>
+            <div className="stage-meta">
+              <div>
+                <p className="eyebrow">Frame</p>
+                <strong>
+                  {bundle?.timeline.length ? safeFrameIndex + 1 : 0} / {bundle?.timeline.length ?? 0}
+                </strong>
+              </div>
+              <div>
+                <p className="eyebrow">Current Token</p>
+                <strong>{currentPayload?.token?.trim() || "idle"}</strong>
+              </div>
+              <div>
+                <p className="eyebrow">Chapter</p>
+                <strong>{currentChapter?.label ?? "Awaiting Tokens"}</strong>
+              </div>
+              <div>
+                <p className="eyebrow">Focus</p>
+                <strong>{selection ? `${selection.kind} · ${selection.id}` : "none"}</strong>
+              </div>
+            </div>
+
+            {bundle ? (
+              <SceneCanvas bundle={bundle} frame={frame} payload={currentPayload} selection={selection} onSelect={setSelection} live={sessionMode === "live"} />
+            ) : (
+              <div className="stage-placeholder">Preparing the starfield…</div>
+            )}
+          </section>
+
+          <section className="scrubber-card">
+            <div className="scrubber-actions">
+              <button type="button" className="secondary-button" onClick={() => stepFrame(-1)} disabled={!bundle || bundle.timeline.length === 0}>
+                Prev
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => setPlaying((current) => !current)}
+                disabled={!bundle || bundle.timeline.length === 0}
+              >
+                {playing ? "Pause" : "Play"}
+              </button>
+              <button type="button" className="secondary-button" onClick={() => stepFrame(1)} disabled={!bundle || bundle.timeline.length === 0}>
+                Next
+              </button>
+              <button type="button" className={liveFollow ? "secondary-button is-active" : "secondary-button"} onClick={() => setLiveFollow((current) => !current)}>
+                Follow Live
+              </button>
+              <button type="button" className="secondary-button" onClick={() => void exportPng()}>
+                Export PNG
+              </button>
+              <button type="button" className="secondary-button" onClick={() => void exportReplay()}>
+                Export `.loomtrace`
+              </button>
+              <label htmlFor={uploadId} className="secondary-button secondary-button--file">
+                Import Replay
+              </label>
+              <input
+                id={uploadId}
+                type="file"
+                accept=".loomtrace"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) {
+                    void importTrace(file);
+                  }
+                }}
+              />
+            </div>
+
+            <input
+              className="scrubber-range"
+              type="range"
+              min={0}
+              max={Math.max((bundle?.timeline.length ?? 1) - 1, 0)}
+              value={safeFrameIndex}
+              onChange={(event) => {
+                setFrameIndex(Number(event.target.value));
+                setPlaying(false);
+                setLiveFollow(false);
+              }}
+              disabled={!bundle || bundle.timeline.length === 0}
+            />
+
+            <div className="scrubber-footer">
+              <div className="range-caption">
+                <span>Space play · ←/→ step · S export</span>
+                <strong>{frame?.phase ?? "idle"}</strong>
+              </div>
+              <div className="chapter-actions">
+                <button type="button" className="secondary-button" onClick={() => jumpToChapter(-1)} disabled={!bundle || chapterIndex <= 0}>
+                  Prev Chapter
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => jumpToChapter(1)}
+                  disabled={!bundle || chapterIndex < 0 || chapterIndex >= bundle.narrative.chapters.length - 1}
+                >
+                  Next Chapter
+                </button>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <aside className="panel panel--right">
+          <section className="card">
+            <div className="card-heading">
+              <p className="eyebrow">Current Frame</p>
+              <span>{currentTokenIndex !== null ? `token ${currentTokenIndex + 1}` : "idle"}</span>
+            </div>
+            <div className="metric-grid">
+              {currentMetrics.length === 0 ? <span className="empty-state">No metrics yet.</span> : null}
+              {currentMetrics.map((metric) => (
+                <div key={metric.id} className="metric-card">
+                  <span>{metric.label}</span>
+                  <strong>{metric.value.toFixed(3)}</strong>
+                </div>
               ))}
             </div>
-          </div>
-        ))}
-      </div>
-      <div className="family-slice">
-        <div className="family-slice__meta">
-          <span>{headline}</span>
-          <strong>
-            {bundle.manifest.family === "transformer"
-              ? "attention slice"
-              : bundle.manifest.family === "cnn"
-                ? "feature slice"
-                : "decision slice"}
-          </strong>
-        </div>
-        {matrix ? (
-          <MatrixHeatmap matrix={matrix.slice(0, 5).map((row) => row.slice(0, 5))} />
-        ) : (
-          <p className="muted-copy">No matrix payload.</p>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function StoryPanel({
-  bundle,
-  frame,
-  chapter,
-  activeTraceTitle,
-  watchFor,
-}: {
-  bundle: TraceBundle;
-  frame: TraceFrame;
-  chapter: TraceBundle["narrative"]["chapters"][number] | null | undefined;
-  activeTraceTitle: string | null;
-  watchFor: readonly string[];
-}) {
-  return (
-    <>
-      <section className="panel-section">
-        <header className="panel-section__header">
-          <span>Story Focus</span>
-          <strong>{chapter?.label ?? "Current frame"}</strong>
-        </header>
-        <p className="story-title">{activeTraceTitle ?? bundle.manifest.summary}</p>
-        <p className="muted-copy">{chapter?.description ?? frame.note ?? "No chapter description available."}</p>
-      </section>
-
-      <section className="panel-section">
-        <header className="panel-section__header">
-          <span>Chapter Metrics</span>
-          <strong>{frame.metric_refs.length} values</strong>
-        </header>
-        <div className="metric-grid">
-          {frame.metric_refs.map((metric) => (
-            <article key={metric.id} className="metric-card">
-              <span>{metric.label}</span>
-              <strong>{formatMetric(metric.value)}</strong>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="panel-section">
-        <header className="panel-section__header">
-          <span>What To Watch</span>
-          <strong>{watchFor.length} cues</strong>
-        </header>
-        <KeyList items={watchFor} />
-      </section>
-
-      <section className="panel-section">
-        <header className="panel-section__header">
-          <span>Current Note</span>
-          <strong>{frame.phase}</strong>
-        </header>
-        <div className="detail-card">
-          <strong>{bundle.manifest.title}</strong>
-          <p>{frame.note ?? "This frame has no additional note."}</p>
-        </div>
-      </section>
-    </>
-  );
-}
-
-function RenderLens({
-  payload,
-  family,
-  mode,
-}: {
-  payload: Record<string, unknown> | null;
-  family: TraceBundle["manifest"]["family"];
-  mode: "story" | "studio";
-}) {
-  const matrix = Array.isArray(payload?.matrix) ? (payload.matrix as number[][]) : null;
-  const series = Array.isArray(payload?.series) ? (payload.series as Array<{ label: string; value: number }>) : null;
-  const headline = typeof payload?.headline === "string" ? payload.headline : "Render lens";
-
-  return (
-    <div className="render-lens">
-      <div className="render-lens__header">
-        <span>{mode === "story" ? "Story Lens" : "Render Lens"}</span>
-        <strong>{family}</strong>
-      </div>
-      <p className="render-lens__title">{headline}</p>
-      {matrix ? <MatrixHeatmap matrix={matrix.slice(0, 6).map((row) => row.slice(0, 6))} /> : null}
-      {series ? (
-        <div className="render-lens__series">
-          {series.slice(0, 3).map((item) => (
-            <div key={item.label} className="render-lens__series-item">
-              <span>{item.label}</span>
-              <strong>{formatMetric(item.value)}</strong>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function LegendPill({ colorClass, label }: { colorClass: string; label: string }) {
-  return (
-    <span className={`legend-pill ${colorClass}`}>
-      <i />
-      {label}
-    </span>
-  );
-}
-
-function KeyList({ items }: { items: readonly string[] }) {
-  return (
-    <div className="key-list">
-      {items.map((item) => (
-        <article key={item} className="key-list__item">
-          <span className="key-list__marker" />
-          <p>{item}</p>
-        </article>
-      ))}
-    </div>
-  );
-}
-
-function getFamilyFocusGroups(bundle: TraceBundle) {
-  const nodes = bundle.graph.nodes;
-  const take = (ids: string[]) =>
-    ids
-      .map((id) => nodes.find((node) => node.id === id))
-      .filter((node): node is TraceBundle["graph"]["nodes"][number] => Boolean(node))
-      .map((node) => ({ id: node.id, label: node.label }));
-
-  if (bundle.manifest.family === "mlp") {
-    return [
-      { label: "Patches", items: take(["patch-a", "patch-b", "patch-c", "patch-d"]) },
-      { label: "Mixer", items: take(["token-mix-1", "channel-mix-1", "token-mix-2", "channel-mix-2"]) },
-      { label: "Readout", items: take(["head", "loss"]) },
-    ].filter((group) => group.items.length > 0);
-  }
-
-  if (bundle.manifest.family === "cnn") {
-    return [
-      { label: "Stem", items: take(["embed", "dwconv1", "norm1"]) },
-      { label: "Bottleneck", items: take(["pwconv1", "act1", "pwconv2"]) },
-      { label: "Head", items: take(["head"]) },
-    ].filter((group) => group.items.length > 0);
-  }
-
-  return [
-    { label: "Tokens", items: take(["token-bos", "token-neuro", "token-loom", "token-glows"]) },
-    { label: "Block", items: take(["rope", "gqa", "residual", "swiglu", "norm"]) },
-    { label: "Decode", items: take(["logits"]) },
-  ].filter((group) => group.items.length > 0);
-}
-
-function PayloadView({ payload }: { payload: Record<string, unknown> }) {
-  const matrix = Array.isArray(payload.matrix) ? (payload.matrix as number[][]) : null;
-  const series = Array.isArray(payload.series) ? (payload.series as Array<{ label: string; value: number }>) : null;
-
-  return (
-    <div className="payload-view">
-      {series ? (
-        <div className="series-bars">
-          {series.map((item) => (
-            <div key={item.label} className="series-bar">
-              <div className="series-bar__meta">
-                <span>{item.label}</span>
-                <strong>{formatMetric(item.value)}</strong>
+            <div className="logit-list">
+              <div className="card-heading">
+                <p className="eyebrow">Top Logits</p>
+                <span>{currentTopLogits.length} candidates</span>
               </div>
-              <div className="series-bar__track">
-                <div className="series-bar__fill" style={{ width: `${Math.max(6, Math.abs(item.value) * 100)}%` }} />
-              </div>
+              {currentTopLogits.length === 0 ? <span className="empty-state">Waiting for decode logits.</span> : null}
+              {currentTopLogits.map((logit) => (
+                <div key={`${logit.token}-${logit.score}`} className="logit-row">
+                  <span>{logit.token}</span>
+                  <div className="logit-bar">
+                    <div style={{ width: `${Math.max(8, logit.score * 100)}%` }} />
+                  </div>
+                  <strong>{logit.score.toFixed(3)}</strong>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      ) : null}
-      {matrix ? <MatrixHeatmap matrix={matrix} /> : null}
+          </section>
+
+          <section className="card">
+            <div className="card-heading">
+              <p className="eyebrow">Focus Detail</p>
+              <span>{selection ? selection.kind : "none"}</span>
+            </div>
+            <strong className="selection-title">{selectionDetail.title}</strong>
+            <p className="selection-copy">{selectionDetail.description}</p>
+            {selectionDetail.metrics.length > 0 ? (
+              <div className="mini-metrics">
+                {selectionDetail.metrics.map((metric) => (
+                  <div key={metric.label} className="mini-metric">
+                    <span>{metric.label}</span>
+                    <strong>{metric.value}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <span className="empty-state">Select a token, structural block, or sample cluster.</span>
+            )}
+          </section>
+
+          <section className="card">
+            <div className="card-heading">
+              <p className="eyebrow">Focus Blocks</p>
+              <span>around block {focusBlock + 1}</span>
+            </div>
+            {focusDigest.length === 0 ? <span className="empty-state">Layer summaries appear after the first token.</span> : null}
+            {focusDigest.map((digest) => (
+              <div key={digest.block} className="digest-row">
+                <strong>Block {digest.block + 1}</strong>
+                <div className="digest-bars">
+                  <DigestBar label="res" value={digest.residual} />
+                  <DigestBar label="attn" value={digest.attention} />
+                  <DigestBar label="delta" value={digest.delta} />
+                  <DigestBar label="ffn" value={digest.ffn} />
+                </div>
+              </div>
+            ))}
+          </section>
+        </aside>
+      </main>
     </div>
   );
 }
 
-function MatrixHeatmap({ matrix }: { matrix: number[][] }) {
-  const scale = scaleLinear<string>().domain([-1, 0, 1]).range(["#ffb45b", "#121b2b", "#15f0ff"]);
-
+function DigestBar({ label, value }: { label: string; value: number }) {
   return (
-    <div
-      className="matrix-heatmap"
-      style={{
-        gridTemplateColumns: `repeat(${matrix[0]?.length ?? 1}, minmax(0, 1fr))`,
-      }}
-    >
-      {matrix.flatMap((row, rowIndex) =>
-        row.map((value, columnIndex) => (
-          <span
-            key={`${rowIndex}-${columnIndex}`}
-            className="matrix-cell"
-            title={String(value)}
-            style={{ backgroundColor: scale(value) }}
-          />
-        )),
-      )}
+    <div className="digest-bar">
+      <span>{label}</span>
+      <div className="digest-bar__track">
+        <div style={{ width: `${Math.max(8, value * 100)}%` }} />
+      </div>
+      <strong>{value.toFixed(2)}</strong>
     </div>
   );
 }
 
-async function detectBrowserRuntime(): Promise<BrowserRuntimeState> {
-  const webgl = canUseWebgl();
-  const navigatorWithGpu = globalThis.navigator as Navigator & {
-    gpu?: {
-      requestAdapter(): Promise<unknown>;
-    };
-  };
-
-  let webgpu = false;
-  if (navigatorWithGpu.gpu) {
-    try {
-      webgpu = Boolean(await navigatorWithGpu.gpu.requestAdapter());
-    } catch {
-      webgpu = false;
-    }
-  }
-
-  if (webgpu) {
-    return {
-      label: "Browser regen • WebGPU ready",
-      detail: "Official traces can be rebuilt locally, and WebGPU is available for future browser-side official runtimes.",
-      webgl,
-      webgpu,
-    };
-  }
-
-  if (webgl) {
-    return {
-      label: "Browser regen • WebGL",
-      detail: "Official traces can be rebuilt locally in this browser. Scene rendering stays on the stable WebGL path.",
-      webgl,
-      webgpu,
-    };
-  }
-
-  return {
-    label: "Limited browser runtime",
-    detail: "Replay still works, but browser-side regeneration and graphics acceleration are constrained in this environment.",
-    webgl,
-    webgpu,
-  };
-}
-
-function canUseWebgl() {
-  if (typeof document === "undefined") return false;
-  const canvas = document.createElement("canvas");
-  const supported = Boolean(canvas.getContext("webgl") || canvas.getContext("experimental-webgl"));
-  canvas.width = 0;
-  canvas.height = 0;
-  return supported;
-}
-
-function formatSelectionLabel(bundle: TraceBundle, selection: SelectionState) {
-  if (!selection) return null;
-  if (selection.kind === "node") {
-    return bundle.graph.nodes.find((node) => node.id === selection.id)?.label ?? selection.id;
-  }
-  return bundle.graph.edges.find((edge) => edge.id === selection.id)?.id ?? selection.id;
-}
-
-function parsePayload(raw: string | undefined) {
+function getInspectPayload(bundle: TraceBundle, frame: TraceFrame) {
+  const payloadId = frame.payload_refs.find((ref) => bundle.manifest.payload_catalog.find((entry) => entry.id === ref && entry.kind === "inspect"));
+  if (!payloadId) return null;
+  const raw = bundle.payloads.get(payloadId);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as Record<string, unknown>;
+    return JSON.parse(raw) as QwenFramePayload;
   } catch {
     return null;
   }
 }
 
-function formatMetric(value: number) {
-  return value.toFixed(Math.abs(value) >= 1 ? 2 : 3);
+function readLastCompletion(bundle: TraceBundle) {
+  const lastFrame = bundle.timeline.at(-1);
+  if (!lastFrame) return "";
+  return getInspectPayload(bundle, lastFrame)?.completion ?? "";
+}
+
+function describeSelection(input: {
+  bundle: TraceBundle | null;
+  frame: TraceFrame | null;
+  payload: QwenFramePayload | null;
+  selection: SelectionState;
+}) {
+  if (!input.selection) {
+    return {
+      title: "No focus",
+      description: "Click a token, structural block, or star cluster to lock the stage around it.",
+      metrics: [],
+    };
+  }
+
+  if (input.selection.kind === "token") {
+    const index = Number(input.selection.id.replace("token-", ""));
+    const payload = input.payload;
+    const localIndex = payload ? payload.tokenWindow.length - (payload.tokenIndex - index + 1) : -1;
+    const token = payload && localIndex >= 0 ? payload.tokenWindow[localIndex] : input.selection.id;
+    const attention = payload && localIndex >= 0 ? payload.attentionRow[localIndex] ?? 0 : 0;
+    return {
+      title: `Token ${index + 1}`,
+      description: "A token focus brightens the local rail and pulls attention weights toward its recent neighborhood.",
+      metrics: [
+        { label: "token", value: token.trim() || "space" },
+        { label: "attention", value: attention.toFixed(3) },
+      ],
+    };
+  }
+
+  if (input.selection.kind === "cluster") {
+    const unit = input.payload?.sampledUnits.find((entry) => entry.id === input.selection.id);
+    return {
+      title: unit?.label ?? input.selection.id,
+      description: "Sample clusters are the visible star grains inside each hybrid sub-block. They move with the same token pulse as their parent lane.",
+      metrics: unit
+        ? [
+            { label: "lane", value: unit.lane },
+            { label: "intensity", value: unit.intensity.toFixed(3) },
+            { label: "affinity", value: unit.tokenAffinity.toFixed(3) },
+          ]
+        : [],
+    };
+  }
+
+  const node = input.bundle?.graph.nodes.find((entry) => entry.id === input.selection.id);
+  const nodeState = input.frame?.node_states.find((entry) => entry.nodeId === input.selection.id);
+  return {
+    title: node?.label ?? input.selection.id,
+    description:
+      "Structural nodes are the stable anchors of the live stage. Their star clusters show block-scale energy rather than an abstract module box.",
+    metrics: node
+      ? [
+          { label: "type", value: node.type },
+          { label: "lane", value: String(node.metadata.lane ?? "n/a") },
+          { label: "activation", value: (nodeState?.activation ?? 0).toFixed(3) },
+        ]
+      : [],
+  };
+}
+
+function triggerDownload(url: string, filename: string) {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+
+function cloneBundle(bundle: TraceBundle): TraceBundle {
+  return {
+    manifest: JSON.parse(JSON.stringify(bundle.manifest)) as TraceBundle["manifest"],
+    graph: JSON.parse(JSON.stringify(bundle.graph)) as TraceBundle["graph"],
+    narrative: JSON.parse(JSON.stringify(bundle.narrative)) as TraceBundle["narrative"],
+    timeline: JSON.parse(JSON.stringify(bundle.timeline)) as TraceBundle["timeline"],
+    payloads: new Map(bundle.payloads),
+    preview: bundle.preview ? new Uint8Array(bundle.preview) : undefined,
+  };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }

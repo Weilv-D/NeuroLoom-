@@ -3,7 +3,7 @@ import { type TraceBundle, type TraceFamily, frameSchema, graphSchema, manifestS
 const familyNodeTypeAllowlist: Record<TraceFamily, Set<string>> = {
   mlp: new Set(["input", "linear", "activation", "output", "loss"]),
   cnn: new Set(["input", "conv", "norm", "activation", "pool", "dense", "output", "loss", "stage"]),
-  transformer: new Set(["token", "embedding", "attention", "residual", "mlp", "norm", "logits", "loss", "decode"]),
+  transformer: new Set(["token", "embedding", "attention", "delta", "residual", "mlp", "norm", "logits", "loss", "decode"]),
 };
 
 export type ValidationResult = { ok: true; family: TraceFamily; warnings: string[] } | { ok: false; errors: string[]; warnings: string[] };

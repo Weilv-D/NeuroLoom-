@@ -1,32 +1,35 @@
-import { useMemo, useRef } from "react";
-import { Bloom, EffectComposer, Noise, Vignette, ChromaticAberration } from "@react-three/postprocessing";
+import { QuadraticBezierLine, Sparkles, Stars, Text } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Line, QuadraticBezierLine, RoundedBox, Text, Stars, Sparkles } from "@react-three/drei";
-import { a, useSpring } from "@react-spring/three";
+import { Bloom, ChromaticAberration, EffectComposer, Noise, Vignette } from "@react-three/postprocessing";
+import { type CSSProperties, useMemo, useRef } from "react";
 
 import type { TraceBundle, TraceFrame } from "@neuroloom/core";
-import type { SelectionState } from "./state";
+import type { QwenFramePayload, QwenSampleUnit } from "@neuroloom/official-traces";
 import * as THREE from "three";
+
+import type { SelectionState } from "./types";
 
 type SceneCanvasProps = {
   bundle: TraceBundle;
-  frame: TraceFrame;
+  frame: TraceFrame | null;
+  payload: QwenFramePayload | null;
   selection: SelectionState;
-  isFrozen: boolean;
   onSelect(selection: SelectionState): void;
+  live: boolean;
 };
 
-type FocusState = "neutral" | "selected" | "related" | "muted" | "frozen-out";
+type FocusState = "selected" | "related" | "muted" | "neutral";
 
-export function SceneCanvas({ bundle, frame, selection, isFrozen, onSelect }: SceneCanvasProps) {
-  const camera = bundle.manifest.camera_presets.find((entry) => entry.id === frame.camera_anchor) ?? bundle.manifest.camera_presets[0]!;
+export function SceneCanvas({ bundle, frame, payload, selection, onSelect, live }: SceneCanvasProps) {
+  const cameraPreset =
+    bundle.manifest.camera_presets.find((entry) => entry.id === frame?.camera_anchor) ?? bundle.manifest.camera_presets[0]!;
 
   return (
-    <div className="scene-stage">
+    <div className="scene-stage scene-shell">
       <Canvas
         camera={{
-          position: [camera.position.x, camera.position.y, camera.position.z],
-          fov: camera.fov,
+          position: [cameraPreset.position.x, cameraPreset.position.y, cameraPreset.position.z],
+          fov: cameraPreset.fov,
           near: 0.1,
           far: 120,
         }}
@@ -34,12 +37,13 @@ export function SceneCanvas({ bundle, frame, selection, isFrozen, onSelect }: Sc
         gl={{ antialias: true, preserveDrawingBuffer: true }}
         dpr={[1, 1.8]}
         onCreated={({ gl }) => {
-          gl.setClearColor("#050710");
-          gl.toneMappingExposure = 1.04;
+          gl.setClearColor("#04070d");
+          gl.toneMappingExposure = 1.08;
         }}
       >
-        <SceneRoot bundle={bundle} frame={frame} camera={camera} selection={selection} isFrozen={isFrozen} onSelect={onSelect} />
+        <SceneRoot bundle={bundle} frame={frame} payload={payload} selection={selection} onSelect={onSelect} live={live} cameraPreset={cameraPreset} />
       </Canvas>
+      <SceneOverlay bundle={bundle} frame={frame} payload={payload} selection={selection} onSelect={onSelect} live={live} />
     </div>
   );
 }
@@ -47,698 +51,763 @@ export function SceneCanvas({ bundle, frame, selection, isFrozen, onSelect }: Sc
 function SceneRoot({
   bundle,
   frame,
-  camera,
+  payload,
   selection,
-  isFrozen,
   onSelect,
+  live,
+  cameraPreset,
 }: {
   bundle: TraceBundle;
-  frame: TraceFrame;
-  camera: TraceBundle["manifest"]["camera_presets"][number];
+  frame: TraceFrame | null;
+  payload: QwenFramePayload | null;
   selection: SelectionState;
-  isFrozen: boolean;
   onSelect(selection: SelectionState): void;
+  live: boolean;
+  cameraPreset: TraceBundle["manifest"]["camera_presets"][number];
 }) {
   const nodeMap = useMemo(() => new Map(bundle.graph.nodes.map((node) => [node.id, node])), [bundle.graph.nodes]);
-  const nodeStateMap = useMemo(() => new Map(frame.node_states.map((state) => [state.nodeId, state])), [frame.node_states]);
-  const edgeStateMap = useMemo(() => new Map(frame.edge_states.map((state) => [state.edgeId, state])), [frame.edge_states]);
-  const scenePayloadId =
-    bundle.manifest.payload_catalog.find((entry) => frame.payload_refs.includes(entry.id) && (entry.kind === "render" || entry.kind === "inspect"))
-      ?.id ?? null;
-  const scenePayload = scenePayloadId ? safeParsePayload(bundle.payloads.get(scenePayloadId)) : null;
-  const selectedNodeId = selection?.kind === "node" ? selection.id : null;
-  const selectedEdgeId = selection?.kind === "edge" ? selection.id : null;
-  const relatedNodeIds = new Set<string>();
-  const relatedEdgeIds = new Set<string>();
+  const nodeStateMap = useMemo(() => {
+    if (!frame) {
+      return new Map(
+        bundle.graph.nodes.map((node) => [
+          node.id,
+          {
+            nodeId: node.id,
+            activation: node.type === "residual" ? 0.28 : node.type === "logits" ? 0.18 : 0.12,
+            emphasis: node.type === "decode" ? 0.4 : 0.28,
+          },
+        ]),
+      );
+    }
+    return new Map(frame.node_states.map((state) => [state.nodeId, state]));
+  }, [bundle.graph.nodes, frame]);
+  const edgeStateMap = useMemo(() => {
+    if (!frame) {
+      return new Map(bundle.graph.edges.map((edge) => [edge.id, { edgeId: edge.id, intensity: 0.16, direction: "forward", emphasis: 0.22 }]));
+    }
+    return new Map(frame.edge_states.map((state) => [state.edgeId, state]));
+  }, [bundle.graph.edges, frame]);
 
-  if (selectedNodeId) {
-    relatedNodeIds.add(selectedNodeId);
+  const focusedUnit = selection?.kind === "cluster" ? payload?.sampledUnits.find((unit) => unit.id === selection.id) ?? null : null;
+  const focusedNodeId =
+    selection?.kind === "node" ? selection.id : selection?.kind === "cluster" ? focusedUnit?.nodeId ?? null : selection?.kind === "token" ? "decode" : null;
+  const connectedNodeIds = new Set<string>();
+  const connectedEdgeIds = new Set<string>();
+
+  if (focusedNodeId) {
+    connectedNodeIds.add(focusedNodeId);
     bundle.graph.edges.forEach((edge) => {
-      if (edge.source === selectedNodeId || edge.target === selectedNodeId) {
-        relatedEdgeIds.add(edge.id);
+      if (edge.source === focusedNodeId || edge.target === focusedNodeId) {
+        connectedNodeIds.add(edge.source);
+        connectedNodeIds.add(edge.target);
+        connectedEdgeIds.add(edge.id);
+      }
+    });
+  }
+
+  const focusPosition = focusedUnit
+    ? addOffset(nodeMap.get(focusedUnit.nodeId)?.position ?? { x: 0, y: 0, z: 0 }, clusterOffset(focusedUnit))
+    : focusedNodeId
+      ? nodeMap.get(focusedNodeId)?.position ?? null
+      : null;
+
+  const residualPoints = bundle.graph.nodes
+    .filter((node) => node.metadata.lane === "residual")
+    .map((node) => [node.position.x, node.position.y, node.position.z] as [number, number, number]);
+
+  return (
+    <>
+      <CameraRig cameraPreset={cameraPreset} focusPosition={focusPosition} live={live} />
+      <color attach="background" args={["#04070d"]} />
+      <fog attach="fog" args={["#04070d", 12, 42]} />
+      <ambientLight intensity={0.7} color="#cfe5ff" />
+      <pointLight position={[-10, 6, 12]} intensity={2.4} color="#2fe5ff" />
+      <pointLight position={[16, -6, 9]} intensity={1.8} color="#ffb85f" />
+      <pointLight position={[0, 12, 14]} intensity={1.15} color="#d7ff63" />
+      <Stars radius={50} depth={0} count={4200} factor={6} saturation={1} fade speed={1.2} />
+      <Sparkles count={260} scale={[32, 18, 10]} size={3.8} speed={0.25} opacity={0.5} color="#1fe8ff" />
+      <NebulaField />
+      <ResidualRiver points={residualPoints} live={live} />
+
+      {bundle.graph.edges.map((edge) => {
+        const source = nodeMap.get(edge.source);
+        const target = nodeMap.get(edge.target);
+        const state = edgeStateMap.get(edge.id);
+        if (!source || !target || !state) return null;
+        return (
+          <EdgeStream
+            key={edge.id}
+            edgeId={edge.id}
+            from={vectorToTuple(source.position)}
+            to={vectorToTuple(target.position)}
+            intensity={state.intensity}
+            direction={state.direction}
+            focus={focusForEdge(edge.id, selection, connectedEdgeIds)}
+            live={live}
+          />
+        );
+      })}
+
+      {bundle.graph.nodes.map((node) => {
+        const nodeState = nodeStateMap.get(node.id);
+        const lane = String(node.metadata.lane ?? node.type);
+        return (
+          <NodeCluster
+            key={node.id}
+            nodeId={node.id}
+            label={node.label}
+            lane={lane}
+            type={node.type}
+            position={vectorToTuple(node.position)}
+            intensity={Math.abs(nodeState?.activation ?? 0.12)}
+            emphasis={nodeState?.emphasis ?? 0.25}
+            focus={focusForNode(node.id, selection, connectedNodeIds)}
+            onSelect={() => onSelect({ kind: "node", id: node.id })}
+            showLabel={selection?.kind === "node" && selection.id === node.id}
+          />
+        );
+      })}
+
+      {payload ? <SampleClusterLayer payload={payload} nodeMap={nodeMap} selection={selection} onSelect={onSelect} /> : null}
+      {payload ? <TokenRail payload={payload} selection={selection} onSelect={onSelect} /> : null}
+      {payload ? <LogitWaterfall payload={payload} /> : null}
+      {focusPosition ? <SelectionHalo position={vectorToTuple(focusPosition)} /> : null}
+      <EffectComposer>
+        <Bloom luminanceThreshold={0.02} intensity={2.1} mipmapBlur />
+        <Noise opacity={0.025} />
+        <ChromaticAberration offset={[0.0012, 0.0016] as [number, number]} />
+        <Vignette offset={0.24} darkness={0.75} />
+      </EffectComposer>
+    </>
+  );
+}
+
+function CameraRig({
+  cameraPreset,
+  focusPosition,
+  live,
+}: {
+  cameraPreset: TraceBundle["manifest"]["camera_presets"][number];
+  focusPosition: { x: number; y: number; z: number } | null;
+  live: boolean;
+}) {
+  const { camera } = useThree();
+  const target = useMemo(() => new THREE.Vector3(cameraPreset.target.x, cameraPreset.target.y, cameraPreset.target.z), [cameraPreset.target]);
+  const position = useMemo(
+    () => new THREE.Vector3(cameraPreset.position.x, cameraPreset.position.y, cameraPreset.position.z),
+    [cameraPreset.position],
+  );
+  const focusTarget = useMemo(() => (focusPosition ? new THREE.Vector3(focusPosition.x, focusPosition.y, focusPosition.z) : null), [focusPosition]);
+  const lookAt = useMemo(() => new THREE.Vector3(), []);
+
+  useFrame((state) => {
+    const pulse = live ? Math.sin(state.clock.elapsedTime * 0.28) * 0.14 : 0;
+    camera.position.lerp(new THREE.Vector3(position.x, position.y + pulse, position.z), 0.06);
+    lookAt.copy(target);
+    if (focusTarget) {
+      lookAt.lerp(focusTarget, 0.16);
+    }
+    camera.lookAt(lookAt);
+  });
+
+  return null;
+}
+
+function NebulaField() {
+  return (
+    <group>
+      {[
+        { position: [-8, 4.5, -4], color: "#0a3a55", scale: [10, 5.5, 1.2], opacity: 0.28 },
+        { position: [2, -3.5, -3], color: "#102743", scale: [18, 8, 1.4], opacity: 0.22 },
+        { position: [12, 3.5, -5], color: "#3b2411", scale: [8, 4.5, 1], opacity: 0.16 },
+      ].map((cloud) => (
+        <mesh key={cloud.position.join(":")} position={cloud.position as [number, number, number]}>
+          <planeGeometry args={[cloud.scale[0], cloud.scale[1]]} />
+          <meshBasicMaterial color={cloud.color} transparent opacity={cloud.opacity} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function ResidualRiver({ points, live }: { points: [number, number, number][]; live: boolean }) {
+  const lineRef = useRef<THREE.Group>(null);
+
+  useFrame((state) => {
+    if (!lineRef.current) return;
+    lineRef.current.position.y = live ? Math.sin(state.clock.elapsedTime * 0.7) * 0.08 : 0;
+  });
+
+  return (
+    <group ref={lineRef}>
+      <QuadraticBezierLine
+        start={points[0] ?? [-10, 0, 0]}
+        mid={[0, 0.55, 0]}
+        end={points.at(-1) ?? [10, 0, 0]}
+        color="#2de2ff"
+        lineWidth={2.6}
+        transparent
+        opacity={0.18}
+      />
+      <QuadraticBezierLine
+        start={points[0] ?? [-10, 0, 0]}
+        mid={[0, -0.2, 0]}
+        end={points.at(-1) ?? [10, 0, 0]}
+        color="#d7ff63"
+        lineWidth={1.2}
+        transparent
+        opacity={0.08}
+      />
+    </group>
+  );
+}
+
+function EdgeStream({
+  edgeId,
+  from,
+  to,
+  intensity,
+  direction,
+  focus,
+  live,
+}: {
+  edgeId: string;
+  from: [number, number, number];
+  to: [number, number, number];
+  intensity: number;
+  direction: string;
+  focus: FocusState;
+  live: boolean;
+}) {
+  const pulseRef = useRef<THREE.Mesh>(null);
+  const arcMid = useMemo<[number, number, number]>(() => {
+    const dx = to[0] - from[0];
+    const dy = to[1] - from[1];
+    const lift = Math.abs(dy) < 0.4 ? 1.2 : 0.55;
+    return [from[0] + dx * 0.5, Math.max(from[1], to[1]) + lift, (from[2] + to[2]) / 2];
+  }, [from, to]);
+  const hash = useMemo(() => hashString(edgeId), [edgeId]);
+  const opacity = focus === "muted" ? 0.05 : focus === "selected" || focus === "related" ? 0.42 : 0.18;
+  const color = direction === "backward" ? "#ffb85f" : "#2fe5ff";
+
+  useFrame((state) => {
+    if (!pulseRef.current) return;
+    const speed = live ? 0.55 : 0.3;
+    const t = (state.clock.elapsedTime * speed + hash * 0.00007) % 1;
+    const point = quadraticPoint(from, arcMid, to, t);
+    pulseRef.current.position.set(point[0], point[1], point[2]);
+    pulseRef.current.scale.setScalar(0.22 + intensity * 0.3);
+  });
+
+  return (
+    <group>
+      <QuadraticBezierLine
+        start={from}
+        mid={arcMid}
+        end={to}
+        color={color}
+        lineWidth={focus === "selected" ? 2.3 : focus === "related" ? 1.5 : 1}
+        transparent
+        opacity={opacity + intensity * 0.16}
+      />
+      <mesh ref={pulseRef}>
+        <sphereGeometry args={[0.09, 10, 10]} />
+        <meshBasicMaterial color={color} transparent opacity={opacity + intensity * 0.22} />
+      </mesh>
+    </group>
+  );
+}
+
+function NodeCluster({
+  nodeId,
+  label,
+  lane,
+  type,
+  position,
+  intensity,
+  emphasis,
+  focus,
+  onSelect,
+  showLabel,
+}: {
+  nodeId: string;
+  label: string;
+  lane: string;
+  type: string;
+  position: [number, number, number];
+  intensity: number;
+  emphasis: number;
+  focus: FocusState;
+  onSelect(): void;
+  showLabel: boolean;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+  const geometry = useMemo(() => buildClusterGeometry(`${nodeId}:${lane}`, 28, lane === "residual" ? 0.58 : 0.44), [lane, nodeId]);
+  const color = laneColor(lane, type);
+  const focusScale = focus === "selected" ? 1.18 : focus === "related" ? 1.08 : 1;
+  const opacity = focus === "muted" ? 0.12 : 0.34 + intensity * 0.46;
+
+  useFrame((state) => {
+    if (!groupRef.current) return;
+    const wobble = 1 + Math.sin(state.clock.elapsedTime * 0.8 + intensity * 4.2) * 0.025;
+    groupRef.current.scale.setScalar(focusScale * wobble);
+  });
+
+  return (
+    <group ref={groupRef} position={position} onClick={(event) => {
+      event.stopPropagation();
+      onSelect();
+    }}>
+      <points geometry={geometry}>
+        <pointsMaterial color={color} size={0.09 + emphasis * 0.08} transparent opacity={opacity} depthWrite={false} />
+      </points>
+      <mesh>
+        <sphereGeometry args={[0.09 + intensity * 0.15, 16, 16]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.9 + emphasis * 1.6} transparent opacity={0.7} />
+      </mesh>
+      {showLabel || type === "decode" || type === "logits" ? (
+        <Text
+          position={[0, 0.48, 0]}
+          fontSize={0.22}
+          color="#f5f8ff"
+          anchorX="center"
+          anchorY="middle"
+          outlineWidth={0.02}
+          outlineColor="#04070d"
+        >
+          {label}
+        </Text>
+      ) : null}
+    </group>
+  );
+}
+
+function SampleClusterLayer({
+  payload,
+  nodeMap,
+  selection,
+  onSelect,
+}: {
+  payload: QwenFramePayload;
+  nodeMap: Map<string, TraceBundle["graph"]["nodes"][number]>;
+  selection: SelectionState;
+  onSelect(selection: SelectionState): void;
+}) {
+  return (
+    <group>
+      {payload.sampledUnits.map((unit) => {
+        const node = nodeMap.get(unit.nodeId);
+        if (!node) return null;
+        const position = addOffset(node.position, clusterOffset(unit));
+        const focus =
+          selection?.kind === "cluster"
+            ? selection.id === unit.id
+              ? "selected"
+              : selection.id.startsWith(`cluster:${unit.lane}:${unit.block}:`)
+                ? "related"
+                : "muted"
+            : selection?.kind === "node"
+              ? selection.id === unit.nodeId
+                ? "related"
+                : "muted"
+              : "neutral";
+        return (
+          <mesh
+            key={unit.id}
+            position={vectorToTuple(position)}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect({ kind: "cluster", id: unit.id });
+            }}
+          >
+            <sphereGeometry args={[0.035 + unit.intensity * 0.06, 10, 10]} />
+            <meshBasicMaterial
+              color={focus === "selected" ? "#d7ff63" : unit.lane === "delta" ? "#ffb85f" : "#2fe5ff"}
+              transparent
+              opacity={focus === "muted" ? 0.1 : 0.25 + unit.intensity * 0.55}
+            />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
+function TokenRail({
+  payload,
+  selection,
+  onSelect,
+}: {
+  payload: QwenFramePayload;
+  selection: SelectionState;
+  onSelect(selection: SelectionState): void;
+}) {
+  const startX = -15.2;
+  const y = 6.1;
+  return (
+    <group>
+      {payload.tokenWindow.map((token, index) => {
+        const absoluteIndex = payload.tokenIndex - payload.tokenWindow.length + index + 1;
+        const selected = selection?.kind === "token" && selection.id === `token-${absoluteIndex}`;
+        const x = startX + index * 0.58;
+        return (
+          <group
+            key={`${absoluteIndex}:${token}`}
+            position={[x, y + Math.sin(index * 0.55) * 0.14, -1.2]}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect({ kind: "token", id: `token-${absoluteIndex}` });
+            }}
+          >
+            <mesh>
+              <sphereGeometry args={[selected ? 0.15 : 0.11, 14, 14]} />
+              <meshBasicMaterial color={selected ? "#d7ff63" : index === payload.tokenWindow.length - 1 ? "#2fe5ff" : "#eef2ff"} transparent opacity={0.8} />
+            </mesh>
+            {selected || index === payload.tokenWindow.length - 1 ? (
+              <Text
+                position={[0, 0.34, 0]}
+                fontSize={0.18}
+                color="#eef2ff"
+                anchorX="center"
+                anchorY="middle"
+                outlineWidth={0.02}
+                outlineColor="#04070d"
+              >
+                {token.trim() || "space"}
+              </Text>
+            ) : null}
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
+function LogitWaterfall({ payload }: { payload: QwenFramePayload }) {
+  return (
+    <group position={[15.5, -2.8, 0.4]}>
+      {payload.topLogits.map((logit, index) => {
+        const height = 0.4 + logit.score * 2.6;
+        return (
+          <group key={logit.token} position={[0, index * -0.8, 0]}>
+            <mesh position={[0, height / 2, 0]}>
+              <boxGeometry args={[0.24, height, 0.24]} />
+              <meshStandardMaterial color={index === 0 ? "#d7ff63" : "#2fe5ff"} emissive={index === 0 ? "#d7ff63" : "#2fe5ff"} emissiveIntensity={0.7} />
+            </mesh>
+            <Text
+              position={[0.64, 0.04, 0]}
+              fontSize={0.18}
+              color="#eef2ff"
+              anchorX="left"
+              anchorY="middle"
+              outlineWidth={0.02}
+              outlineColor="#04070d"
+            >
+              {`${logit.token.trim() || "space"} · ${logit.score.toFixed(2)}`}
+            </Text>
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
+function SelectionHalo({ position }: { position: [number, number, number] }) {
+  const groupRef = useRef<THREE.Group>(null);
+  useFrame((state) => {
+    if (!groupRef.current) return;
+    groupRef.current.rotation.z = state.clock.elapsedTime * 0.4;
+    groupRef.current.scale.setScalar(1 + Math.sin(state.clock.elapsedTime * 3) * 0.06);
+  });
+
+  return (
+    <group ref={groupRef} position={position}>
+      <mesh>
+        <ringGeometry args={[0.4, 0.54, 48]} />
+        <meshBasicMaterial color="#d7ff63" transparent opacity={0.28} />
+      </mesh>
+    </group>
+  );
+}
+
+function SceneOverlay({
+  bundle,
+  frame,
+  payload,
+  selection,
+  onSelect,
+  live,
+}: {
+  bundle: TraceBundle;
+  frame: TraceFrame | null;
+  payload: QwenFramePayload | null;
+  selection: SelectionState;
+  onSelect(selection: SelectionState): void;
+  live: boolean;
+}) {
+  const nodeMap = useMemo(() => new Map(bundle.graph.nodes.map((node) => [node.id, node])), [bundle.graph.nodes]);
+  const nodeStateMap = useMemo(
+    () =>
+      new Map(
+        (frame?.node_states ?? bundle.graph.nodes.map((node) => ({ nodeId: node.id, activation: 0.16, emphasis: 0.2 }))).map((state) => [
+          state.nodeId,
+          state,
+        ]),
+      ),
+    [bundle.graph.nodes, frame?.node_states],
+  );
+  const focusedUnit = selection?.kind === "cluster" ? payload?.sampledUnits.find((unit) => unit.id === selection.id) ?? null : null;
+  const focusedNodeId =
+    selection?.kind === "node" ? selection.id : selection?.kind === "cluster" ? focusedUnit?.nodeId ?? null : selection?.kind === "token" ? "decode" : null;
+  const relatedNodeIds = new Set<string>();
+  if (focusedNodeId) {
+    relatedNodeIds.add(focusedNodeId);
+    bundle.graph.edges.forEach((edge) => {
+      if (edge.source === focusedNodeId || edge.target === focusedNodeId) {
         relatedNodeIds.add(edge.source);
         relatedNodeIds.add(edge.target);
       }
     });
   }
 
-  if (selectedEdgeId) {
-    const activeEdge = bundle.graph.edges.find((edge) => edge.id === selectedEdgeId);
-    if (activeEdge) {
-      relatedEdgeIds.add(activeEdge.id);
-      relatedNodeIds.add(activeEdge.source);
-      relatedNodeIds.add(activeEdge.target);
-    }
-  }
-
-  const focusPosition = selectedNodeId
-    ? (nodeMap.get(selectedNodeId)?.position ?? null)
-    : selectedEdgeId
-      ? getEdgeFocusPosition(bundle, selectedEdgeId, nodeMap)
-      : null;
+  const overlayEdges = bundle.graph.edges
+    .filter((edge) => edge.type.includes("return") || edge.type === "decode-flow" || edge.type === "residual-flow")
+    .slice(0, 120);
+  const overlayUnits =
+    payload?.sampledUnits.filter((unit) => unit.tokenAffinity > 0.36 || Math.abs(unit.block - ((payload.tokenIndex ?? 0) % 24)) < 3) ?? [];
 
   return (
-    <>
-      <CameraRig position={camera.position} target={camera.target} focusTarget={focusPosition} isFrozen={isFrozen} />
-      <color attach="background" args={["#050710"]} />
-      <fog attach="fog" args={["#050710", 10, 35]} />
-      <ambientLight intensity={0.8} color="#acc5f6" />
-      <directionalLight position={[10, 15, 12]} intensity={2.4} color="#d7f6ff" />
-      <pointLight position={[-7, 6, 8]} intensity={2.0} color="#15f0ff" />
-      <pointLight position={[10, -4, 8]} intensity={1.5} color="#ffb45b" />
-      <Stars radius={40} depth={0} count={3000} factor={6} saturation={1} fade speed={1.5} />
-      <Sparkles count={150} scale={25} size={3} speed={0.4} opacity={0.6} color="#15f0ff" />
-      <StageBackdrop family={bundle.manifest.family} isFrozen={isFrozen} />
-      {focusPosition ? <SelectionAura family={bundle.manifest.family} position={vectorToTuple(focusPosition)} /> : null}
-      <FamilySignatureLayer bundle={bundle} frame={frame} payload={scenePayload} nodeStateMap={nodeStateMap} />
-      {bundle.graph.edges.map((edge) => {
-        const source = nodeMap.get(edge.source);
-        const target = nodeMap.get(edge.target);
-        const state = edgeStateMap.get(edge.id);
-        if (!source || !target || !state) {
-          return null;
-        }
-        return (
-          <EdgeFlow
-            key={edge.id}
-            family={bundle.manifest.family}
-            from={vectorToTuple(source.position)}
-            to={vectorToTuple(target.position)}
-            state={state}
-            focus={getEdgeFocusState(edge.id, selection, relatedEdgeIds, isFrozen)}
-          />
-        );
-      })}
-      {bundle.graph.nodes.map((node) => (
-        <NodeGlyph
-          key={node.id}
-          family={bundle.manifest.family}
-          label={node.label}
-          type={node.type}
-          position={vectorToTuple(node.position)}
-          state={nodeStateMap.get(node.id)}
-          focus={getNodeFocusState(node.id, selection, relatedNodeIds, isFrozen)}
-          onClick={() => onSelect({ id: node.id, kind: "node" })}
-        />
-      ))}
-      {bundle.manifest.family === "transformer" ? (
-        <AttentionRibbonLayer bundle={bundle} payload={scenePayload} selection={selection} isFrozen={isFrozen} />
-      ) : null}
-      <EffectComposer>
-        <Bloom luminanceThreshold={0.05} intensity={1.8} mipmapBlur />
-        <Noise opacity={0.03} />
-        <ChromaticAberration offset={[0.001, 0.001] as any} opacity={0.5} />
-        <Vignette offset={0.25} darkness={0.7} />
-      </EffectComposer>
-    </>
-  );
-}
-
-function FamilySignatureLayer({
-  bundle,
-  frame,
-  payload,
-  nodeStateMap,
-}: {
-  bundle: TraceBundle;
-  frame: TraceFrame;
-  payload: unknown;
-  nodeStateMap: Map<string, TraceFrame["node_states"][number]>;
-}) {
-  if (bundle.manifest.family === "mlp") {
-    return <MlpSignatureLayer frame={frame} payload={payload} />;
-  }
-
-  if (bundle.manifest.family === "cnn") {
-    return <CnnSignatureLayer payload={payload} />;
-  }
-
-  return <TransformerSignatureLayer bundle={bundle} payload={payload} nodeStateMap={nodeStateMap} />;
-}
-
-function CameraRig({
-  position,
-  target,
-  focusTarget,
-  isFrozen,
-}: {
-  position: { x: number; y: number; z: number };
-  target: { x: number; y: number; z: number };
-  focusTarget: { x: number; y: number; z: number } | null;
-  isFrozen: boolean;
-}) {
-  const { camera } = useThree();
-  const baseTarget = useMemo(() => new THREE.Vector3(target.x, target.y, target.z), [target]);
-  const focusVector = useMemo(() => (focusTarget ? new THREE.Vector3(focusTarget.x, focusTarget.y, focusTarget.z) : null), [focusTarget]);
-  const cameraVector = useMemo(() => new THREE.Vector3(position.x, position.y, position.z), [position]);
-  const lookTargetRef = useMemo(() => new THREE.Vector3(), []);
-
-  useFrame(() => {
-    const positionLerp = isFrozen ? 0.04 : 0.08;
-    const focusLerp = isFrozen ? 0.35 : 0.22;
-    camera.position.lerp(cameraVector, positionLerp);
-    lookTargetRef.copy(baseTarget);
-    if (focusVector) {
-      lookTargetRef.lerp(focusVector, focusLerp);
-    }
-    camera.lookAt(lookTargetRef.x, lookTargetRef.y, lookTargetRef.z);
-  });
-
-  return null;
-}
-
-function SelectionAura({ family, position }: { family: TraceBundle["manifest"]["family"]; position: [number, number, number] }) {
-  const ringScale = family === "transformer" ? 1.6 : family === "cnn" ? 1.2 : 1;
-  const groupRef = useRef<THREE.Group>(null);
-
-  useFrame((state) => {
-    if (groupRef.current) {
-      groupRef.current.rotation.z = state.clock.elapsedTime * 0.5;
-      groupRef.current.scale.setScalar(1 + Math.sin(state.clock.elapsedTime * 3) * 0.05);
-    }
-  });
-
-  return (
-    <group position={[position[0], position[1], position[2] - 0.48]}>
-      <group ref={groupRef}>
-        <mesh>
-          <ringGeometry args={[0.72 * ringScale, 1.04 * ringScale, 72]} />
-          <meshBasicMaterial color="#d8ff66" transparent opacity={0.25} />
-        </mesh>
-        <mesh position={[0, 0, -0.06]}>
-          <planeGeometry args={[2.1 * ringScale, 2.1 * ringScale]} />
-          <meshBasicMaterial color="#15f0ff" transparent opacity={0.08} />
-        </mesh>
-      </group>
-    </group>
-  );
-}
-
-function StageBackdrop({ family, isFrozen }: { family: TraceBundle["manifest"]["family"]; isFrozen: boolean }) {
-  const opacityScale = isFrozen ? 0.3 : 1;
-  if (family === "mlp") {
-    return (
-      <group>
-        {[-5, -2, 1.4, 4.8].map((x, index) => (
-          <mesh key={x} position={[x, 0, -1.4]}>
-            <planeGeometry args={[2.4, 7.4]} />
-            <meshBasicMaterial color={index % 2 === 0 ? "#0d1830" : "#101726"} transparent opacity={0.3 * opacityScale} />
-          </mesh>
-        ))}
-        <mesh position={[1.3, -3.4, -0.8]} rotation={[-0.24, 0.1, 0]}>
-          <planeGeometry args={[5.5, 2.1]} />
-          <meshBasicMaterial color="#12203a" transparent opacity={0.34 * opacityScale} />
-        </mesh>
-      </group>
-    );
-  }
-
-  if (family === "cnn") {
-    return (
-      <group>
-        {[-6, -3.8, 0.8, 5.6].map((x, index) => (
-          <mesh key={x} position={[x, 0, -1.8]}>
-            <planeGeometry args={[2.2, 6.2]} />
-            <meshBasicMaterial color={index % 2 === 0 ? "#0f1626" : "#101a30"} transparent opacity={0.28 * opacityScale} />
-          </mesh>
-        ))}
-        {[-0.45, -0.15, 0.15, 0.45].map((offset) => (
-          <mesh key={offset} position={[-1.8 + offset, 2.9 - offset * 2, -0.4]}>
-            <planeGeometry args={[1.2, 1.2]} />
-            <meshBasicMaterial color="#17365b" transparent opacity={0.16 * opacityScale} />
-          </mesh>
-        ))}
-      </group>
-    );
-  }
-
-  return (
-    <group>
-      <mesh position={[-5.2, 0, -1.5]}>
-        <planeGeometry args={[1.7, 7.2]} />
-        <meshBasicMaterial color="#11192e" transparent opacity={0.3 * opacityScale} />
-      </mesh>
-      <mesh position={[0.2, 0, -1.6]}>
-        <planeGeometry args={[2.3, 5.2]} />
-        <meshBasicMaterial color="#112339" transparent opacity={0.26 * opacityScale} />
-      </mesh>
-      <mesh position={[8.8, -0.2, -1.2]}>
-        <planeGeometry args={[2, 3.8]} />
-        <meshBasicMaterial color="#18223a" transparent opacity={0.32 * opacityScale} />
-      </mesh>
-    </group>
-  );
-}
-
-function EdgeFlow({
-  family,
-  from,
-  to,
-  state,
-  focus,
-}: {
-  family: TraceBundle["manifest"]["family"];
-  from: [number, number, number];
-  to: [number, number, number];
-  state: TraceFrame["edge_states"][number];
-  focus: FocusState;
-}) {
-  const baseColor = state.direction === "backward" ? "#ffb45b" : "#15f0ff";
-  const targetColor =
-    focus === "selected"
-      ? blendColor(baseColor, "#d8ff66", 0.58)
-      : focus === "related"
-        ? blendColor(baseColor, "#d8ff66", 0.22)
-        : baseColor;
-  const widthBoost = focus === "selected" ? 1.25 : focus === "related" ? 0.45 : focus === "muted" ? -0.08 : focus === "frozen-out" ? -0.4 : 0;
-  const opacityMultiplier = focus === "muted" ? 0.46 : focus === "frozen-out" ? 0.12 : focus === "related" ? 0.82 : focus === "selected" ? 1 : 1;
-  const targetWidth = Math.max(0.4, 1.2 + state.emphasis * 1.3 + widthBoost);
-  const targetOpacity = clamp((0.14 + state.intensity * 0.42) * opacityMultiplier, 0.01, 0.92);
-
-  const { color, width, opacity } = useSpring({
-    color: targetColor,
-    width: targetWidth,
-    opacity: targetOpacity,
-    config: { mass: 1, tension: 120, friction: 14 },
-  });
-
-  if (family === "transformer" && Math.abs(from[1] - to[1]) > 1.2) {
-    const mid = [(from[0] + to[0]) / 2, Math.max(from[1], to[1]) + 1.5, (from[2] + to[2]) / 2] as [number, number, number];
-    return (
-      <QuadraticBezierLine start={from} end={to} mid={mid} color={targetColor} lineWidth={targetWidth} transparent opacity={targetOpacity} />
-    );
-  }
-
-  return <Line points={[from, to]} color={targetColor} lineWidth={targetWidth} transparent opacity={targetOpacity} />;
-}
-
-function NodeGlyph({
-  family,
-  label,
-  type,
-  position,
-  state,
-  focus,
-  onClick,
-}: {
-  family: TraceBundle["manifest"]["family"];
-  label: string;
-  type: string;
-  position: [number, number, number];
-  state: TraceFrame["node_states"][number] | undefined;
-  focus: FocusState;
-  onClick(): void;
-}) {
-  const activation = state?.activation ?? 0;
-  const emphasis = state?.emphasis ?? 0.3;
-  const baseColor = activation >= 0 ? "#15f0ff" : "#ffb45b";
-  const targetHighlightColor = focus === "selected" ? "#d8ff66" : focus === "related" ? blendColor(baseColor, "#d8ff66", 0.18) : baseColor;
-  const focusScale = focus === "selected" ? 1.14 : focus === "related" ? 1.04 : focus === "muted" ? 0.96 : focus === "frozen-out" ? 0.82 : 1;
-  const targetOpacity = focus === "muted" ? 0.58 : focus === "frozen-out" ? 0.18 : focus === "related" ? 0.88 : 0.94;
-  const targetEmissiveIntensity =
-    focus === "selected"
-      ? 2.35 + emphasis * 1.8
-      : focus === "related"
-        ? 1.7 + emphasis * 1.4
-        : focus === "frozen-out"
-          ? 0.12 + emphasis * 0.2
-          : 1.15 + emphasis * 1.2;
-  const sizeScale = (0.95 + emphasis * 0.55) * focusScale;
-  const targetScale =
-    family === "mlp"
-      ? ([0.66 * sizeScale, 0.66 * sizeScale, 0.66 * sizeScale] as [number, number, number])
-      : family === "cnn"
-        ? ([1.05 * sizeScale, 0.42 * sizeScale, 0.28 + emphasis * 0.42] as [number, number, number])
-        : ([1.22 * sizeScale, type === "token" ? 0.36 : 0.48, 0.18 + emphasis * 0.26] as [number, number, number]);
-
-  const { emissive, emissiveIntensity, opacity, groupScale } = useSpring({
-    emissive: targetHighlightColor,
-    emissiveIntensity: targetEmissiveIntensity,
-    opacity: targetOpacity,
-    groupScale: targetScale,
-    config: { mass: 1, tension: 150, friction: 18 },
-  });
-
-  return (
-    <a.group position={position} scale={groupScale}>
-      {family === "mlp" ? (
-        <mesh onClick={onClick}>
-          <sphereGeometry args={[0.42, 32, 32]} />
-          <a.meshStandardMaterial
-            color="#0a1722"
-            emissive={emissive as any}
-            emissiveIntensity={emissiveIntensity}
-            roughness={0.24}
-            metalness={0.18}
-            transparent
-            opacity={opacity}
-          />
-        </mesh>
-      ) : (
-        <RoundedBox args={[1, 1, 1]} radius={0.15} smoothness={6} onClick={onClick}>
-          <a.meshPhysicalMaterial
-            color="#07101b"
-            emissive={emissive as any}
-            emissiveIntensity={emissiveIntensity}
-            roughness={0.12}
-            metalness={0.2}
-            transmission={0.3}
-            thickness={0.4}
-            clearcoat={0.8}
-            clearcoatRoughness={0.1}
-            transparent
-            opacity={opacity}
-          />
-        </RoundedBox>
-      )}
-      {focus === "selected" ? (
-        <mesh position={[0, 0, -0.2]}>
-          <ringGeometry args={[0.45, 0.52, 48]} />
-          <meshBasicMaterial color="#d8ff66" transparent opacity={0.66} />
-        </mesh>
-      ) : null}
-      {focus !== "frozen-out" ? (
-        <Text
-          position={[0, family === "transformer" ? -0.62 : -0.74, 0]}
-          fontSize={0.18}
-          color={focus === "muted" ? "#7f8ca8" : focus === "selected" ? "#fcffe1" : "#eef2ff"}
-        >
-          {label}
-        </Text>
-      ) : null}
-    </a.group>
-  );
-}
-
-function AttentionRibbonLayer({ bundle, payload, selection, isFrozen }: { bundle: TraceBundle; payload: unknown; selection: SelectionState; isFrozen: boolean }) {
-  if (!payload || typeof payload !== "object" || !("matrix" in payload)) {
-    return null;
-  }
-
-  const matrix = Array.isArray(payload.matrix) ? payload.matrix : null;
-  if (!matrix) return null;
-
-  const tokens = bundle.graph.nodes.filter((node) => node.type === "token").sort((left, right) => left.order - right.order);
-  const selectedTokenId = selection?.kind === "node" ? selection.id : null;
-
-  return (
-    <group>
-      {tokens.flatMap((sourceNode, sourceIndex) =>
-        tokens.map((targetNode, targetIndex) => {
-          const weight = matrix[sourceIndex]?.[targetIndex];
-          if (typeof weight !== "number" || weight < 0.32) {
-            return null;
-          }
-          const start = vectorToTuple(sourceNode.position);
-          const end = vectorToTuple(targetNode.position);
-          const arcHeight = 1.4 + Math.abs(sourceIndex - targetIndex) * 0.55;
-          const focused = selectedTokenId ? sourceNode.id === selectedTokenId || targetNode.id === selectedTokenId : false;
-          const dimmed = Boolean(selectedTokenId) && !focused;
+    <div className={`stage-overlay-2d ${live ? "is-live" : ""}`}>
+      <svg className="stage-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <linearGradient id="river" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#2fe5ff" stopOpacity="0.15" />
+            <stop offset="55%" stopColor="#9ff4ff" stopOpacity="0.4" />
+            <stop offset="100%" stopColor="#d7ff63" stopOpacity="0.18" />
+          </linearGradient>
+          <linearGradient id="flow" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#2fe5ff" stopOpacity="0.06" />
+            <stop offset="100%" stopColor="#ffb85f" stopOpacity="0.22" />
+          </linearGradient>
+        </defs>
+        <path d={residualPath(bundle)} className="stage-river" />
+        {overlayEdges.map((edge) => {
+          const source = nodeMap.get(edge.source);
+          const target = nodeMap.get(edge.target);
+          if (!source || !target) return null;
           return (
-            <QuadraticBezierLine
-              key={`${sourceNode.id}-${targetNode.id}`}
-              start={start}
-              end={end}
-              mid={[(start[0] + end[0]) / 2, arcHeight, 0]}
-              color={focused ? "#d8ff66" : "#15f0ff"}
-              lineWidth={0.6 + weight * 1.1 + (focused ? 0.28 : 0)}
-              transparent
-              opacity={clamp((0.08 + weight * 0.28) * (dimmed ? 0.14 : focused ? 1.2 : 1), 0.03, 0.54)}
+            <path
+              key={edge.id}
+              d={edgePath(source.position, target.position)}
+              className={selection && (edge.source === focusedNodeId || edge.target === focusedNodeId) ? "stage-flow is-focused" : "stage-flow"}
             />
           );
-        }),
-      )}
-    </group>
-  );
-}
+        })}
+      </svg>
 
-function MlpSignatureLayer({ frame, payload }: { frame: TraceFrame; payload: unknown }) {
-  const matrix = readMatrix(payload);
-  const series = readSeries(payload);
-  const focusStrength = clamp(0.35 + (frame.metric_refs.find((metric) => metric.id === "confidence")?.value ?? 0.4) * 0.6, 0.25, 1);
-  const pulse = 0.22 + (Math.sin(frame.frame_id * 0.55) + 1) * 0.08;
-
-  return (
-    <group>
-      <mesh position={[-0.9, 2.45, -0.48]}>
-        <planeGeometry args={[7.6, 0.18]} />
-        <meshBasicMaterial color="#15f0ff" transparent opacity={0.1 + pulse} />
-      </mesh>
-      <mesh position={[-0.9, -2.45, -0.48]}>
-        <planeGeometry args={[7.6, 0.18]} />
-        <meshBasicMaterial color="#ffb45b" transparent opacity={0.08 + pulse * 0.82} />
-      </mesh>
-      <group position={[0.8, -2.6, 0.48]} rotation={[-1.08, 0.08, 0]}>
-        <MatrixPlane matrix={sliceMatrix(matrix, 8, 8)} cellSize={0.24} depth={0.04} />
-      </group>
-      <SeriesBars3D position={[1.15, -4.02, 1.2]} series={series} color="#15f0ff" />
-      <mesh position={[4.82, 0, -0.3]} rotation={[0, 0, Math.PI / 2]}>
-        <ringGeometry args={[0.56, 0.72 + focusStrength * 0.1, 56]} />
-        <meshBasicMaterial color="#15f0ff" transparent opacity={0.16 + focusStrength * 0.2} />
-      </mesh>
-      <mesh position={[4.82, 0, -0.42]} rotation={[0, 0, Math.PI / 2]}>
-        <ringGeometry args={[0.84, 0.9 + focusStrength * 0.08, 56]} />
-        <meshBasicMaterial color="#d8ff66" transparent opacity={0.08 + focusStrength * 0.12} />
-      </mesh>
-    </group>
-  );
-}
-
-function CnnSignatureLayer({ payload }: { payload: unknown }) {
-  const matrix = readMatrix(payload);
-  const series = readSeries(payload);
-
-  return (
-    <group>
-      <FeatureMapStack position={[-1.8, 2.65, 0.25]} matrix={sliceMatrix(matrix, 6, 6)} tint="#15f0ff" />
-      <FeatureMapStack position={[3.08, 2.55, 0.18]} matrix={sliceMatrix(reverseColumns(matrix), 6, 6)} tint="#d8ff66" />
-      <SeriesBars3D position={[8.5, -1.8, 0.7]} series={series} color="#ffb45b" />
-      <RoundedBox args={[1.24, 2.42, 0.16]} radius={0.12} smoothness={4} position={[8.36, 0.18, -0.44]}>
-        <meshBasicMaterial color="#172136" transparent opacity={0.24} />
-      </RoundedBox>
-    </group>
-  );
-}
-
-function TransformerSignatureLayer({
-  bundle,
-  payload,
-  nodeStateMap,
-}: {
-  bundle: TraceBundle;
-  payload: unknown;
-  nodeStateMap: Map<string, TraceFrame["node_states"][number]>;
-}) {
-  const series = readSeries(payload);
-  const matrix = readMatrix(payload);
-  const tokens = bundle.graph.nodes.filter((node) => node.type === "token").sort((left, right) => left.order - right.order);
-
-  return (
-    <group>
-      <group position={[1.55, 2.2, 0.32]} rotation={[-0.92, 0.04, 0]}>
-        <MatrixPlane matrix={sliceMatrix(matrix, 6, 6)} cellSize={0.22} depth={0.03} />
-      </group>
-      <mesh position={[1.65, -1.42, -0.5]}>
-        <planeGeometry args={[6.8, 0.24]} />
-        <meshBasicMaterial color="#15f0ff" transparent opacity={0.1} />
-      </mesh>
-      <mesh position={[3.18, -1.42, -0.38]}>
-        <planeGeometry args={[6.2, 0.14]} />
-        <meshBasicMaterial color="#d8ff66" transparent opacity={0.08} />
-      </mesh>
-      <RoundedBox args={[3.2, 0.22, 0.1]} radius={0.08} smoothness={4} position={[1.8, -1.38, -0.1]}>
-        <meshStandardMaterial color="#09111b" emissive="#15f0ff" emissiveIntensity={0.5} transparent opacity={0.72} />
-      </RoundedBox>
-      {tokens.map((token) => {
-        const state = nodeStateMap.get(token.id);
-        const emphasis = state?.emphasis ?? 0.5;
-        return (
-          <RoundedBox
-            key={`token-plate-${token.id}`}
-            args={[1.16, 0.18, 0.06]}
-            radius={0.06}
-            smoothness={4}
-            position={[token.position.x, token.position.y - 0.42, -0.05]}
-          >
-            <meshStandardMaterial
-              color="#08121d"
-              emissive={"#15f0ff"}
-              emissiveIntensity={0.25 + emphasis * 0.45}
-              transparent
-              opacity={0.68}
-            />
-          </RoundedBox>
-        );
-      })}
-      <SeriesBars3D position={[9.3, -1.7, 0.55]} series={series} color="#15f0ff" />
-      <RoundedBox args={[1.4, 2.7, 0.14]} radius={0.12} smoothness={4} position={[9.24, -0.1, -0.45]}>
-        <meshBasicMaterial color="#162033" transparent opacity={0.24} />
-      </RoundedBox>
-    </group>
-  );
-}
-
-function MatrixPlane({ matrix, cellSize, depth }: { matrix: number[][]; cellSize: number; depth: number }) {
-  const rows = matrix.length;
-  const columns = matrix[0]?.length ?? 0;
-  const xOffset = ((columns - 1) * cellSize) / 2;
-  const yOffset = ((rows - 1) * cellSize) / 2;
-
-  return (
-    <group>
-      {matrix.flatMap((row, rowIndex) =>
-        row.map((value, columnIndex) => {
-          const positionX = columnIndex * cellSize - xOffset;
-          const positionY = yOffset - rowIndex * cellSize;
-          const magnitude = clamp(Math.abs(value), 0, 1);
+      <div className="stage-stars">
+        {bundle.graph.nodes.map((node) => {
+          const state = nodeStateMap.get(node.id);
+          const focus = focusForNode(node.id, selection, relatedNodeIds);
+          const projected = project(node.position);
           return (
-            <mesh key={`${rowIndex}-${columnIndex}`} position={[positionX, positionY, magnitude * depth]}>
-              <planeGeometry args={[cellSize * 0.82, cellSize * 0.82]} />
-              <meshBasicMaterial
-                color={blendColor("#121b2b", value >= 0 ? "#15f0ff" : "#ffb45b", 0.16 + magnitude * 0.84)}
-                transparent
-                opacity={0.24 + magnitude * 0.58}
-              />
-            </mesh>
+            <button
+              key={node.id}
+              type="button"
+              className={`star-node lane-${String(node.metadata.lane ?? node.type)} focus-${focus}`}
+              style={
+                {
+                  left: `${projected.left}%`,
+                  top: `${projected.top}%`,
+                  "--node-size": `${34 + Math.abs(state?.activation ?? 0.12) * 28}px`,
+                  "--node-opacity": `${focus === "muted" ? 0.16 : 0.48 + Math.abs(state?.activation ?? 0.12) * 0.4}`,
+                } as CSSProperties
+              }
+              onClick={() => onSelect({ kind: "node", id: node.id })}
+            >
+              <span className="star-core" />
+              {Array.from({ length: 10 }, (_, index) => (
+                <span
+                  key={index}
+                  className="star-grain"
+                  style={grainStyle(node.id, index)}
+                />
+              ))}
+              {selection?.kind === "node" && selection.id === node.id ? <span className="star-label">{node.label}</span> : null}
+            </button>
           );
-        }),
-      )}
-    </group>
+        })}
+
+        {overlayUnits.map((unit) => {
+          const node = nodeMap.get(unit.nodeId);
+          if (!node) return null;
+          const projected = project(addOffset(node.position, clusterOffset(unit)));
+          const selected = selection?.kind === "cluster" && selection.id === unit.id;
+          return (
+            <button
+              key={unit.id}
+              type="button"
+              className={selected ? "sample-star is-selected" : "sample-star"}
+              style={
+                {
+                  left: `${projected.left}%`,
+                  top: `${projected.top}%`,
+                  "--sample-size": `${4 + unit.intensity * 6}px`,
+                  "--sample-opacity": `${0.22 + unit.intensity * 0.68}`,
+                } as CSSProperties
+              }
+              onClick={() => onSelect({ kind: "cluster", id: unit.id })}
+            />
+          );
+        })}
+
+        {payload?.tokenWindow.map((token, index) => {
+          const absoluteIndex = payload.tokenIndex - payload.tokenWindow.length + index + 1;
+          const selected = selection?.kind === "token" && selection.id === `token-${absoluteIndex}`;
+          return (
+            <button
+              key={`${absoluteIndex}:${token}`}
+              type="button"
+              className={selected ? "token-node is-selected" : "token-node"}
+              style={{ left: `${12 + index * 2.8}%`, top: "10%" }}
+              onClick={() => onSelect({ kind: "token", id: `token-${absoluteIndex}` })}
+            >
+              <span />
+              {selected || index === payload.tokenWindow.length - 1 ? <em>{token.trim() || "space"}</em> : null}
+            </button>
+          );
+        })}
+      </div>
+
+      {!payload ? <div className="stage-overlay">Waiting for token flow…</div> : null}
+    </div>
   );
 }
 
-function FeatureMapStack({ position, matrix, tint }: { position: [number, number, number]; matrix: number[][]; tint: string }) {
-  const layers = [0, 1, 2];
-  return (
-    <group position={position}>
-      {layers.map((layer) => (
-        <group key={layer} position={[layer * 0.16, -layer * 0.12, -layer * 0.15]}>
-          <RoundedBox args={[1.6, 1.6, 0.04]} radius={0.08} smoothness={4}>
-            <meshBasicMaterial color="#0d1422" transparent opacity={0.72 - layer * 0.12} />
-          </RoundedBox>
-          <group position={[0, 0, 0.05]}>
-            <MatrixPlane matrix={matrix} cellSize={0.19} depth={0.02} />
-          </group>
-        </group>
-      ))}
-      <mesh position={[0, 0, -0.36]}>
-        <planeGeometry args={[1.9, 1.9]} />
-        <meshBasicMaterial color={tint} transparent opacity={0.08} />
-      </mesh>
-    </group>
-  );
+function focusForNode(nodeId: string, selection: SelectionState, relatedNodeIds: Set<string>): FocusState {
+  if (!selection) return "neutral";
+  if (selection.kind === "node" && selection.id === nodeId) return "selected";
+  if (relatedNodeIds.has(nodeId)) return "related";
+  return "muted";
 }
 
-function SeriesBars3D({
-  position,
-  series,
-  color,
-}: {
-  position: [number, number, number];
-  series: Array<{ label: string; value: number }>;
-  color: string;
-}) {
-  const items = series.slice(0, 3);
-  return (
-    <group position={position}>
-      {items.map((item, index) => {
-        const height = 0.25 + clamp(Math.abs(item.value), 0, 1.6) * 1.25;
-        return (
-          <group key={item.label} position={[index * 0.4 - ((items.length - 1) * 0.4) / 2, height / 2, 0]}>
-            <RoundedBox args={[0.22, height, 0.22]} radius={0.06} smoothness={4}>
-              <meshStandardMaterial color="#08111b" emissive={color} emissiveIntensity={0.7} transparent opacity={0.88} />
-            </RoundedBox>
-          </group>
-        );
-      })}
-    </group>
-  );
+function focusForEdge(edgeId: string, selection: SelectionState, relatedEdgeIds: Set<string>): FocusState {
+  if (!selection) return "neutral";
+  if (relatedEdgeIds.has(edgeId)) return "related";
+  return "muted";
 }
 
-function safeParsePayload(raw: string | undefined) {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
+function laneColor(lane: string, type: string) {
+  if (type === "logits" || type === "decode") return "#d7ff63";
+  if (lane === "delta") return "#ffb85f";
+  if (lane === "attention") return "#2fe5ff";
+  if (lane === "ffn") return "#9fc6ff";
+  if (lane === "embedding") return "#eef2ff";
+  return "#3ce7ff";
+}
+
+function clusterOffset(unit: QwenSampleUnit) {
+  const laneOffsets: Record<QwenSampleUnit["lane"], [number, number, number]> = {
+    residual: [0, 0.42, -0.18],
+    attention: [-0.18, 0.56, 0.12],
+    delta: [0.22, -0.52, -0.14],
+    ffn: [0.16, -0.74, 0.18],
+  };
+  const base = laneOffsets[unit.lane];
+  return {
+    x: base[0] + (unit.cluster - 1) * 0.18,
+    y: base[1] + Math.sin(unit.block * 0.6 + unit.cluster) * 0.08,
+    z: base[2] + (unit.cluster - 1) * 0.06,
+  };
+}
+
+function buildClusterGeometry(seed: string, count: number, spread: number) {
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array(count * 3);
+  for (let index = 0; index < count; index++) {
+    const rng = seeded(seed, index + 1);
+    positions[index * 3 + 0] = (rng() - 0.5) * spread;
+    positions[index * 3 + 1] = (rng() - 0.5) * spread;
+    positions[index * 3 + 2] = (rng() - 0.5) * spread * 0.8;
   }
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  return geometry;
+}
+
+function quadraticPoint(start: [number, number, number], mid: [number, number, number], end: [number, number, number], t: number) {
+  const inv = 1 - t;
+  return [
+    inv * inv * start[0] + 2 * inv * t * mid[0] + t * t * end[0],
+    inv * inv * start[1] + 2 * inv * t * mid[1] + t * t * end[1],
+    inv * inv * start[2] + 2 * inv * t * mid[2] + t * t * end[2],
+  ] as [number, number, number];
+}
+
+function seeded(seed: string, salt: number) {
+  let value = hashString(`${seed}:${salt}`) || 1;
+  return () => {
+    value = (value * 1664525 + 1013904223) >>> 0;
+    return value / 4294967295;
+  };
+}
+
+function hashString(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function addOffset(position: { x: number; y: number; z: number }, offset: { x: number; y: number; z: number }) {
+  return {
+    x: position.x + offset.x,
+    y: position.y + offset.y,
+    z: position.z + offset.z,
+  };
 }
 
 function vectorToTuple(vector: { x: number; y: number; z: number }): [number, number, number] {
   return [vector.x, vector.y, vector.z];
 }
 
-function readMatrix(payload: unknown): number[][] {
-  if (!payload || typeof payload !== "object" || !("matrix" in payload) || !Array.isArray(payload.matrix)) {
-    return [
-      [0.2, 0.35, 0.5, 0.12],
-      [0.1, -0.12, 0.28, 0.42],
-      [-0.34, 0.22, 0.45, 0.18],
-      [0.15, 0.3, -0.18, 0.4],
-    ];
-  }
-
-  return payload.matrix
-    .filter((row): row is unknown[] => Array.isArray(row))
-    .map((row) => row.map((value) => (typeof value === "number" ? value : 0)));
-}
-
-function readSeries(payload: unknown): Array<{ label: string; value: number }> {
-  if (!payload || typeof payload !== "object" || !("series" in payload) || !Array.isArray(payload.series)) {
-    return [
-      { label: "signal", value: 0.42 },
-      { label: "focus", value: 0.64 },
-      { label: "drift", value: 0.28 },
-    ];
-  }
-
-  return payload.series.flatMap((entry) => {
-    if (!entry || typeof entry !== "object") return [];
-    const label = "label" in entry && typeof entry.label === "string" ? entry.label : "metric";
-    const value = "value" in entry && typeof entry.value === "number" ? entry.value : 0;
-    return [{ label, value }];
-  });
-}
-
-function sliceMatrix(matrix: number[][], maxRows: number, maxColumns: number) {
-  return matrix.slice(0, maxRows).map((row) => row.slice(0, maxColumns));
-}
-
-function reverseColumns(matrix: number[][]) {
-  return matrix.map((row) => [...row].reverse());
-}
-
-function blendColor(base: string, accent: string, amount: number) {
-  return new THREE.Color(base).lerp(new THREE.Color(accent), clamp(amount, 0, 1)).getStyle();
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function getNodeFocusState(nodeId: string, selection: SelectionState, relatedNodeIds: Set<string>, isFrozen: boolean): FocusState {
-  if (!selection) return "neutral";
-  if (selection.kind === "node" && selection.id === nodeId) return "selected";
-  if (relatedNodeIds.has(nodeId)) return "related";
-  return isFrozen ? "frozen-out" : "muted";
-}
-
-function getEdgeFocusState(edgeId: string, selection: SelectionState, relatedEdgeIds: Set<string>, isFrozen: boolean): FocusState {
-  if (!selection) return "neutral";
-  if (selection.kind === "edge" && selection.id === edgeId) return "selected";
-  if (relatedEdgeIds.has(edgeId)) return "related";
-  return isFrozen ? "frozen-out" : "muted";
-}
-
-function getEdgeFocusPosition(bundle: TraceBundle, edgeId: string, nodeMap: Map<string, TraceBundle["graph"]["nodes"][number]>) {
-  const edge = bundle.graph.edges.find((entry) => entry.id === edgeId);
-  if (!edge) return null;
-  const source = nodeMap.get(edge.source);
-  const target = nodeMap.get(edge.target);
-  if (!source || !target) return null;
+function project(position: { x: number; y: number; z: number }) {
   return {
-    x: (source.position.x + target.position.x) / 2,
-    y: (source.position.y + target.position.y) / 2,
-    z: (source.position.z + target.position.z) / 2,
+    left: 50 + position.x * 2.65,
+    top: 50 - position.y * 5.6,
   };
+}
+
+function residualPath(bundle: TraceBundle) {
+  const residualNodes = bundle.graph.nodes.filter((node) => node.metadata.lane === "residual");
+  return residualNodes
+    .map((node, index) => {
+      const point = project(node.position);
+      return `${index === 0 ? "M" : "L"} ${point.left} ${point.top}`;
+    })
+    .join(" ");
+}
+
+function edgePath(source: { x: number; y: number; z: number }, target: { x: number; y: number; z: number }) {
+  const start = project(source);
+  const end = project(target);
+  const midX = (start.left + end.left) / 2;
+  const lift = Math.abs(start.top - end.top) < 6 ? -5 : -2;
+  const midY = Math.min(start.top, end.top) + lift;
+  return `M ${start.left} ${start.top} Q ${midX} ${midY} ${end.left} ${end.top}`;
+}
+
+function grainStyle(seed: string, index: number) {
+  const rng = seeded(seed, index + 1);
+  const left = 18 + rng() * 64;
+  const top = 18 + rng() * 64;
+  const delay = rng() * 1.8;
+  const scale = 0.45 + rng() * 1.2;
+  return {
+    left: `${left}%`,
+    top: `${top}%`,
+    animationDelay: `${delay}s`,
+    transform: `translate(-50%, -50%) scale(${scale})`,
+  } satisfies CSSProperties;
 }

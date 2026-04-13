@@ -7,12 +7,13 @@
   "scripts": {
     "build": "pnpm generate:traces && pnpm -r --if-present build",
     "dev": "pnpm generate:traces && pnpm --filter @neuroloom/studio dev",
+    "dev:runner": "pnpm --filter @neuroloom/runner dev",
     "generate:traces": "pnpm --filter @neuroloom/core build && pnpm --filter @neuroloom/official-traces build && pnpm --filter @neuroloom/exporters generate",
     "test": "pnpm generate:traces && pnpm -r --if-present test",
     "test:release": "pnpm test && pnpm test:visual",
     "test:visual": "pnpm build && playwright test",
     "test:visual:update": "pnpm build && playwright test --update-snapshots",
-    "validate:samples": "pnpm generate:traces && pnpm --filter @neuroloom/core loomtrace ../../apps/studio/public/traces/tiny-mlp-mixer.loomtrace ../../apps/studio/public/traces/tiny-convnext.loomtrace ../../apps/studio/public/traces/tiny-llama.loomtrace",
+    "validate:samples": "pnpm generate:traces && pnpm --filter @neuroloom/core loomtrace ../../apps/studio/public/traces/qwen3.5-0.8b-sample.loomtrace",
     "lint": "eslint apps packages",
     "format": "prettier --write \"apps/**/*.ts\" \"apps/**/*.tsx\" \"packages/**/*.ts\" \"tools/**/*.ts\"",
     "format:check": "prettier --check \"apps/**/*.ts\" \"apps/**/*.tsx\" \"packages/**/*.ts\" \"tools/**/*.ts\""

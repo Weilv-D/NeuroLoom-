@@ -1,51 +1,52 @@
 # NeuroLoom Docs
 
-NeuroLoom is a replay-first neural network explainer for `MLP`, `CNN`, and decoder-only `Transformer` traces.
+NeuroLoom is a live-first visual stage for `Qwen/Qwen3.5-0.8B`.
 
-## Read This First
+## Read First
+
 - [README](../README.md)
-  Project definition, monorepo layout, setup commands, and current scope.
-- [`.loomtrace` Specification](./loomtrace-spec.md)
-  The controlled replay bundle format used by the studio and exporters.
+  Product definition, repo layout, local setup, runner, and scope boundary.
+- [`.loomtrace` profile](./loomtrace-spec.md)
+  The replay bundle format used for exported Qwen sessions and the built-in sample replay.
 
 ## Product Surface
-- `Story Mode`
-  Guided chapter-by-chapter walkthrough of an official trace.
-- `Studio Mode`
-  Frame-by-frame inspection with timeline control, structure selection, render payload lens, and PNG export.
 
-## Official Content
-- `tiny-mlp-mixer`
-  Patch-to-mixer fan-out, token/channel mixing, and classifier collapse.
-- `tiny-convnext`
-  Depthwise filtering, inverted bottlenecks, and classifier lift.
-- `tiny-llama`
-  RoPE, grouped-query attention, residual flow, and decode stabilization.
+- `Live stage`
+  Prompt input, live token streaming, starfield motion, structural focus, and local runner status.
+- `Replay scrubber`
+  Timeline control, PNG export, `.loomtrace` export/import, and chapter jumps.
+- `Focus panels`
+  Current token, logits, structural block digest, and selection-specific details for tokens, nodes, and sampled clusters.
 
 ## Local Commands
+
 ```bash
 pnpm install
 pnpm generate:traces
 pnpm dev
-pnpm test
+pnpm dev:runner
 pnpm build
+pnpm test
 pnpm validate:samples
 ```
 
 ## Repo Map
+
 - `apps/studio`
-  React + Vite + React Three Fiber app.
+  Single-page Qwen starfield frontend.
 - `packages/core`
-  Schema, validator, archive I/O, replay engine, renderer contract, CLI.
+  Shared archive, replay, schema, validation, and CLI.
+- `packages/official-traces`
+  Qwen sample trace builder and live session recorder.
 - `tools/exporters`
-  Official trace generators.
+  Emits the official fallback `.loomtrace`.
+- `tools/runner`
+  Local API and WebSocket server for live sessions.
 
-## Scope Boundary
-NeuroLoom v1 is intentionally narrow.
+## Boundary
 
-- Replay-first only.
-- Desktop-first.
-- Three supported families only.
-- No live streaming.
-- No arbitrary runtime capture.
-- No generic DAG renderer fallback.
+- One model: `Qwen/Qwen3.5-0.8B`
+- One family profile: `transformer` with `delta` structural nodes
+- Live-first, replay-capable
+- No generic model library
+- No browser inference path in the app shell
