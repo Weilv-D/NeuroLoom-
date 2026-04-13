@@ -1,6 +1,6 @@
 # NeuroLoom Docs
 
-NeuroLoom is a replay-first neural network explainer for `MLP`, `CNN`, and standard `GPT-style Transformer` traces.
+NeuroLoom is a replay-first neural network explainer for `MLP`, `CNN`, and decoder-only `Transformer` traces.
 
 ## Read This First
 - [README](../README.md)
@@ -15,12 +15,12 @@ NeuroLoom is a replay-first neural network explainer for `MLP`, `CNN`, and stand
   Frame-by-frame inspection with timeline control, structure selection, render payload lens, and PNG export.
 
 ## Official Content
-- `spiral-2d-mlp`
-  MLP fan-out, loss anchor, backward pulse, and decision-boundary drift.
-- `fashion-mnist-cnn`
-  Stage-based feature compression and classifier lift.
-- `tiny-gpt-style-transformer`
-  Token rail, attention ribbons, residual flow, and decode stabilization.
+- `tiny-mlp-mixer`
+  Patch-to-mixer fan-out, token/channel mixing, and classifier collapse.
+- `tiny-convnext`
+  Depthwise filtering, inverted bottlenecks, and classifier lift.
+- `tiny-llama`
+  RoPE, grouped-query attention, residual flow, and decode stabilization.
 
 ## Local Commands
 ```bash

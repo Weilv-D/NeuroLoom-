@@ -8,7 +8,7 @@ const PLAYBACK_INTERVAL_MS = 520;
 import { officialTraces } from "./sampleTraces";
 import { type SelectionState, useStudioStore } from "./state";
 import { loadTraceFromFile, loadTraceFromUrl } from "./traceLoader";
-import { runOnnxInference } from "./onnxInference";
+import { canRunOnnxModel, runOnnxInference } from "./onnxInference";
 
 type BrowserRuntimeState = {
   label: string;
@@ -169,13 +169,14 @@ export function App() {
     currentChapter && bundle ? bundle.narrative.chapters.findIndex((chapter) => chapter.id === currentChapter.id) : -1;
   const renderPayloadId =
     bundle && deferredFrame
-      ? (bundle.manifest.payload_catalog.find((entry) => entry.kind === "render" && deferredFrame.payload_refs.includes(entry.id))?.id ??
-        null)
+      ? (bundle.manifest.payload_catalog.find(
+          (entry) => deferredFrame.payload_refs.includes(entry.id) && (entry.kind === "render" || entry.kind === "inspect"),
+        )?.id ?? null)
       : null;
   const renderPayload = bundle && renderPayloadId ? parsePayload(bundle.payloads.get(renderPayloadId)) : null;
   const sceneSelection = frozenSelection ?? selection;
   const regenerationTarget = bundle?.manifest.model_id ?? traceId ?? null;
-  const canRegenerateInBrowser = regenerationTarget ? officialTraces.some((trace) => trace.id === regenerationTarget) : false;
+  const canRegenerateInBrowser = regenerationTarget ? canRunOnnxModel(regenerationTarget) : false;
   const frozenSelectionLabel = bundle && frozenSelection ? formatSelectionLabel(bundle, frozenSelection) : null;
 
   async function exportStageSnapshot() {
@@ -1226,24 +1227,24 @@ function getFamilyFocusGroups(bundle: TraceBundle) {
 
   if (bundle.manifest.family === "mlp") {
     return [
-      { label: "Inputs", items: take(["input-x", "input-y"]) },
-      { label: "Hidden", items: take(["hidden-a", "hidden-b", "hidden-c", "mix-a", "mix-b"]) },
-      { label: "Readout", items: take(["output", "loss"]) },
+      { label: "Patches", items: take(["patch-a", "patch-b", "patch-c", "patch-d"]) },
+      { label: "Mixer", items: take(["token-mix-1", "channel-mix-1", "token-mix-2", "channel-mix-2"]) },
+      { label: "Readout", items: take(["head", "loss"]) },
     ].filter((group) => group.items.length > 0);
   }
 
   if (bundle.manifest.family === "cnn") {
     return [
-      { label: "Image + Stage", items: take(["image", "stage-1", "stage-2"]) },
-      { label: "Feature Maps", items: take(["conv-1", "pool-1", "conv-2", "pool-2"]) },
-      { label: "Head", items: take(["dense", "output", "loss"]) },
+      { label: "Stem", items: take(["embed", "dwconv1", "norm1"]) },
+      { label: "Bottleneck", items: take(["pwconv1", "act1", "pwconv2"]) },
+      { label: "Head", items: take(["head"]) },
     ].filter((group) => group.items.length > 0);
   }
 
   return [
     { label: "Tokens", items: take(["token-bos", "token-neuro", "token-loom", "token-glows"]) },
-    { label: "Block", items: take(["embed", "attn", "residual", "mlp", "norm"]) },
-    { label: "Decode", items: take(["logits", "decode"]) },
+    { label: "Block", items: take(["rope", "gqa", "residual", "swiglu", "norm"]) },
+    { label: "Decode", items: take(["logits"]) },
   ].filter((group) => group.items.length > 0);
 }
 

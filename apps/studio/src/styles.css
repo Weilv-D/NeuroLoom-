@@ -499,7 +499,12 @@ code {
 
 .scene-stage {
   width: 100%;
+  height: 620px;
   min-height: 620px;
+}
+
+.scene-stage canvas {
+  display: block;
 }
 
 .timeline {

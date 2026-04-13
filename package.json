@@ -12,7 +12,7 @@
     "test:release": "pnpm test && pnpm test:visual",
     "test:visual": "pnpm build && playwright test",
     "test:visual:update": "pnpm build && playwright test --update-snapshots",
-    "validate:samples": "pnpm generate:traces && pnpm --filter @neuroloom/core loomtrace ../../apps/studio/public/traces/spiral-2d-mlp.loomtrace ../../apps/studio/public/traces/fashion-mnist-cnn.loomtrace ../../apps/studio/public/traces/tiny-gpt-style-transformer.loomtrace",
+    "validate:samples": "pnpm generate:traces && pnpm --filter @neuroloom/core loomtrace ../../apps/studio/public/traces/tiny-mlp-mixer.loomtrace ../../apps/studio/public/traces/tiny-convnext.loomtrace ../../apps/studio/public/traces/tiny-llama.loomtrace",
     "lint": "eslint apps packages",
     "format": "prettier --write \"apps/**/*.ts\" \"apps/**/*.tsx\" \"packages/**/*.ts\" \"tools/**/*.ts\"",
     "format:check": "prettier --check \"apps/**/*.ts\" \"apps/**/*.tsx\" \"packages/**/*.ts\" \"tools/**/*.ts\""

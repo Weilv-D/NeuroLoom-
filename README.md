@@ -4,7 +4,7 @@
   <img src="./docs/workflow.svg" alt="NeuroLoom Workflow" width="100%">
 </p>
 
-**NeuroLoom** is a cinematic, open-source 2.5D neural network execution replay interpreter. Built with highly polished WebGL/WebGPU graphics, it visualizes the exact forward and backward passes of state-of-the-art miniature neural architectures inspired by Hugging Face models. 
+**NeuroLoom** is a cinematic, open-source 2.5D neural network execution replay interpreter. It reads controlled `.loomtrace` bundles and reconstructs modern miniature `MLP`, `CNN`, and decoder-only `Transformer` runs as replayable visual scenes.
 
 *Read this in other languages: [English](README.md), [简体中文](README_zh.md)*
 
@@ -15,7 +15,6 @@
   - **Tiny ConvNeXt**: Modernized visual processing using depthwise convolutions.
   - **Tiny Llama**: Feature-rich Transformer with RoPE (Rotary Positional Embeddings), GQA (Grouped-Query Attention), and SwiGLU.
 - **Cinematic Rendering**: 2.5D physical animations, frosted glass materials, and glowing refractions via React Three Fiber.
-- **In-Browser Inference**: Authentic forward passes using ONNX Runtime Web + WebGPU.
 - **Trace-Driven Replay**: Reconstructs deterministic execution graphs and tensors perfectly from `.loomtrace` binary files.
 - **Dual Presentation Modes**: *Story Mode* for narrative presentations and *Studio Mode* for frame-by-frame metric analysis.
 - **Deep Interaction**: Isolate and freeze neural nodes to inspect raw tensors, activations, and multi-head attention weights.
@@ -40,8 +39,8 @@ pnpm dev
 
 ## Structure
 
-- `apps/studio`: The WebGL/React 19 visualizer frontend.
-- `packages/core`: The `.loomtrace` schema engine that validates physical nodes and timeline frames.
-- `packages/official-traces`: The graph layout and animation timeline orchestrator for official architectures.
-- `tools/exporters`: Trace payload generators that parse neural shapes into binary sequences.
-- `tools/model-training`: PyTorch to ONNX model trainers, supporting GPU-accelerated intermediate value extraction.
+- `apps/studio`: The WebGL/React 19 replay studio frontend.
+- `packages/core`: The `.loomtrace` schema, validator, archive I/O, and replay engine.
+- `packages/official-traces`: Official graph layouts, per-frame payloads, and narrative content for the three supported families.
+- `tools/exporters`: Bundle generators that emit the official `.loomtrace` samples used by the studio.
+- `tools/model-training`: Optional PyTorch to ONNX experiments and intermediate extraction utilities.

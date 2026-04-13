@@ -96,6 +96,10 @@ type ModelConfig = {
   };
 };
 
+export function canRunOnnxModel(modelId: string): boolean {
+  return modelId in MODEL_CONFIGS;
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Shared helpers                                                            */
 /* -------------------------------------------------------------------------- */

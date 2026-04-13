@@ -4,8 +4,6 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Line, QuadraticBezierLine, RoundedBox, Text, Stars, Sparkles } from "@react-three/drei";
 import { a, useSpring } from "@react-spring/three";
 
-const AnimatedLine = a(Line);
-const AnimatedBezier = a(QuadraticBezierLine);
 import type { TraceBundle, TraceFrame } from "@neuroloom/core";
 import type { SelectionState } from "./state";
 import * as THREE from "three";
@@ -26,6 +24,13 @@ export function SceneCanvas({ bundle, frame, selection, isFrozen, onSelect }: Sc
   return (
     <div className="scene-stage">
       <Canvas
+        camera={{
+          position: [camera.position.x, camera.position.y, camera.position.z],
+          fov: camera.fov,
+          near: 0.1,
+          far: 120,
+        }}
+        style={{ width: "100%", height: "100%" }}
         gl={{ antialias: true, preserveDrawingBuffer: true }}
         dpr={[1, 1.8]}
         onCreated={({ gl }) => {
@@ -57,9 +62,10 @@ function SceneRoot({
   const nodeMap = useMemo(() => new Map(bundle.graph.nodes.map((node) => [node.id, node])), [bundle.graph.nodes]);
   const nodeStateMap = useMemo(() => new Map(frame.node_states.map((state) => [state.nodeId, state])), [frame.node_states]);
   const edgeStateMap = useMemo(() => new Map(frame.edge_states.map((state) => [state.edgeId, state])), [frame.edge_states]);
-  const renderPayloadId =
-    bundle.manifest.payload_catalog.find((entry) => entry.kind === "render" && frame.payload_refs.includes(entry.id))?.id ?? null;
-  const renderPayload = renderPayloadId ? safeParsePayload(bundle.payloads.get(renderPayloadId)) : null;
+  const scenePayloadId =
+    bundle.manifest.payload_catalog.find((entry) => frame.payload_refs.includes(entry.id) && (entry.kind === "render" || entry.kind === "inspect"))
+      ?.id ?? null;
+  const scenePayload = scenePayloadId ? safeParsePayload(bundle.payloads.get(scenePayloadId)) : null;
   const selectedNodeId = selection?.kind === "node" ? selection.id : null;
   const selectedEdgeId = selection?.kind === "edge" ? selection.id : null;
   const relatedNodeIds = new Set<string>();
@@ -104,7 +110,7 @@ function SceneRoot({
       <Sparkles count={150} scale={25} size={3} speed={0.4} opacity={0.6} color="#15f0ff" />
       <StageBackdrop family={bundle.manifest.family} isFrozen={isFrozen} />
       {focusPosition ? <SelectionAura family={bundle.manifest.family} position={vectorToTuple(focusPosition)} /> : null}
-      <FamilySignatureLayer bundle={bundle} frame={frame} payload={renderPayload} nodeStateMap={nodeStateMap} />
+      <FamilySignatureLayer bundle={bundle} frame={frame} payload={scenePayload} nodeStateMap={nodeStateMap} />
       {bundle.graph.edges.map((edge) => {
         const source = nodeMap.get(edge.source);
         const target = nodeMap.get(edge.target);
@@ -136,7 +142,7 @@ function SceneRoot({
         />
       ))}
       {bundle.manifest.family === "transformer" ? (
-        <AttentionRibbonLayer bundle={bundle} payload={renderPayload} selection={selection} isFrozen={isFrozen} />
+        <AttentionRibbonLayer bundle={bundle} payload={scenePayload} selection={selection} isFrozen={isFrozen} />
       ) : null}
       <EffectComposer>
         <Bloom luminanceThreshold={0.05} intensity={1.8} mipmapBlur />
@@ -304,8 +310,8 @@ function EdgeFlow({
       : focus === "related"
         ? blendColor(baseColor, "#d8ff66", 0.22)
         : baseColor;
-  const widthBoost = focus === "selected" ? 1.25 : focus === "related" ? 0.45 : focus === "muted" ? -0.2 : focus === "frozen-out" ? -0.6 : 0;
-  const opacityMultiplier = focus === "muted" ? 0.18 : focus === "frozen-out" ? 0.02 : focus === "related" ? 0.74 : focus === "selected" ? 1 : 1;
+  const widthBoost = focus === "selected" ? 1.25 : focus === "related" ? 0.45 : focus === "muted" ? -0.08 : focus === "frozen-out" ? -0.4 : 0;
+  const opacityMultiplier = focus === "muted" ? 0.46 : focus === "frozen-out" ? 0.12 : focus === "related" ? 0.82 : focus === "selected" ? 1 : 1;
   const targetWidth = Math.max(0.4, 1.2 + state.emphasis * 1.3 + widthBoost);
   const targetOpacity = clamp((0.14 + state.intensity * 0.42) * opacityMultiplier, 0.01, 0.92);
 
@@ -319,19 +325,11 @@ function EdgeFlow({
   if (family === "transformer" && Math.abs(from[1] - to[1]) > 1.2) {
     const mid = [(from[0] + to[0]) / 2, Math.max(from[1], to[1]) + 1.5, (from[2] + to[2]) / 2] as [number, number, number];
     return (
-      <AnimatedBezier
-        start={from}
-        end={to}
-        mid={mid}
-        color={color as any}
-        lineWidth={width as any}
-        transparent
-        opacity={opacity as any}
-      />
+      <QuadraticBezierLine start={from} end={to} mid={mid} color={targetColor} lineWidth={targetWidth} transparent opacity={targetOpacity} />
     );
   }
 
-  return <AnimatedLine points={[from, to]} color={color as any} lineWidth={width as any} transparent opacity={opacity as any} />;
+  return <Line points={[from, to]} color={targetColor} lineWidth={targetWidth} transparent opacity={targetOpacity} />;
 }
 
 function NodeGlyph({
@@ -355,10 +353,16 @@ function NodeGlyph({
   const emphasis = state?.emphasis ?? 0.3;
   const baseColor = activation >= 0 ? "#15f0ff" : "#ffb45b";
   const targetHighlightColor = focus === "selected" ? "#d8ff66" : focus === "related" ? blendColor(baseColor, "#d8ff66", 0.18) : baseColor;
-  const focusScale = focus === "selected" ? 1.14 : focus === "related" ? 1.04 : focus === "muted" ? 0.9 : focus === "frozen-out" ? 0.7 : 1;
-  const targetOpacity = focus === "muted" ? 0.28 : focus === "frozen-out" ? 0.06 : focus === "related" ? 0.82 : 0.92;
+  const focusScale = focus === "selected" ? 1.14 : focus === "related" ? 1.04 : focus === "muted" ? 0.96 : focus === "frozen-out" ? 0.82 : 1;
+  const targetOpacity = focus === "muted" ? 0.58 : focus === "frozen-out" ? 0.18 : focus === "related" ? 0.88 : 0.94;
   const targetEmissiveIntensity =
-    focus === "selected" ? 2.25 + emphasis * 1.7 : focus === "related" ? 1.55 + emphasis * 1.35 : focus === "frozen-out" ? 0.02 : 0.9 + emphasis * 1.1;
+    focus === "selected"
+      ? 2.35 + emphasis * 1.8
+      : focus === "related"
+        ? 1.7 + emphasis * 1.4
+        : focus === "frozen-out"
+          ? 0.12 + emphasis * 0.2
+          : 1.15 + emphasis * 1.2;
   const sizeScale = (0.95 + emphasis * 0.55) * focusScale;
   const targetScale =
     family === "mlp"
@@ -379,17 +383,13 @@ function NodeGlyph({
     <a.group position={position} scale={groupScale}>
       {family === "mlp" ? (
         <mesh onClick={onClick}>
-          <sphereGeometry args={[0.34, 32, 32]} />
-          <a.meshPhysicalMaterial
-            color="#081520"
+          <sphereGeometry args={[0.42, 32, 32]} />
+          <a.meshStandardMaterial
+            color="#0a1722"
             emissive={emissive as any}
             emissiveIntensity={emissiveIntensity}
-            roughness={0.08}
-            metalness={0.15}
-            transmission={0.4}
-            thickness={0.5}
-            clearcoat={1.0}
-            clearcoatRoughness={0.1}
+            roughness={0.24}
+            metalness={0.18}
             transparent
             opacity={opacity}
           />
@@ -455,7 +455,7 @@ function AttentionRibbonLayer({ bundle, payload, selection, isFrozen }: { bundle
           const focused = selectedTokenId ? sourceNode.id === selectedTokenId || targetNode.id === selectedTokenId : false;
           const dimmed = Boolean(selectedTokenId) && !focused;
           return (
-            <AnimatedBezier
+            <QuadraticBezierLine
               key={`${sourceNode.id}-${targetNode.id}`}
               start={start}
               end={end}
@@ -476,13 +476,22 @@ function MlpSignatureLayer({ frame, payload }: { frame: TraceFrame; payload: unk
   const matrix = readMatrix(payload);
   const series = readSeries(payload);
   const focusStrength = clamp(0.35 + (frame.metric_refs.find((metric) => metric.id === "confidence")?.value ?? 0.4) * 0.6, 0.25, 1);
+  const pulse = 0.22 + (Math.sin(frame.frame_id * 0.55) + 1) * 0.08;
 
   return (
     <group>
-      <group position={[1.3, -3.15, 0.45]} rotation={[-1.18, 0.08, 0]}>
+      <mesh position={[-0.9, 2.45, -0.48]}>
+        <planeGeometry args={[7.6, 0.18]} />
+        <meshBasicMaterial color="#15f0ff" transparent opacity={0.1 + pulse} />
+      </mesh>
+      <mesh position={[-0.9, -2.45, -0.48]}>
+        <planeGeometry args={[7.6, 0.18]} />
+        <meshBasicMaterial color="#ffb45b" transparent opacity={0.08 + pulse * 0.82} />
+      </mesh>
+      <group position={[0.8, -2.6, 0.48]} rotation={[-1.08, 0.08, 0]}>
         <MatrixPlane matrix={sliceMatrix(matrix, 8, 8)} cellSize={0.24} depth={0.04} />
       </group>
-      <SeriesBars3D position={[1.15, -4.05, 1.2]} series={series} color="#15f0ff" />
+      <SeriesBars3D position={[1.15, -4.02, 1.2]} series={series} color="#15f0ff" />
       <mesh position={[4.82, 0, -0.3]} rotation={[0, 0, Math.PI / 2]}>
         <ringGeometry args={[0.56, 0.72 + focusStrength * 0.1, 56]} />
         <meshBasicMaterial color="#15f0ff" transparent opacity={0.16 + focusStrength * 0.2} />
@@ -521,10 +530,14 @@ function TransformerSignatureLayer({
   nodeStateMap: Map<string, TraceFrame["node_states"][number]>;
 }) {
   const series = readSeries(payload);
+  const matrix = readMatrix(payload);
   const tokens = bundle.graph.nodes.filter((node) => node.type === "token").sort((left, right) => left.order - right.order);
 
   return (
     <group>
+      <group position={[1.55, 2.2, 0.32]} rotation={[-0.92, 0.04, 0]}>
+        <MatrixPlane matrix={sliceMatrix(matrix, 6, 6)} cellSize={0.22} depth={0.03} />
+      </group>
       <mesh position={[1.65, -1.42, -0.5]}>
         <planeGeometry args={[6.8, 0.24]} />
         <meshBasicMaterial color="#15f0ff" transparent opacity={0.1} />
