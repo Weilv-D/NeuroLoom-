@@ -56,4 +56,23 @@ export const officialTraces = [
       "Use chapter jumps to isolate token rail, attention, and decode-head compositions.",
     ],
   },
+  {
+    id: "tiny-sota-vit",
+    family: "transformer",
+    label: "Tiny SOTA ViT",
+    summary: "Patch embedding, multihead attention, and linear classifier visualization for Vision." ,
+    accent: "electric",
+    path: "/traces/tiny-sota-vit.loomtrace",
+    storyTitle: "Explore how image patches fuse into semantic meaning.",
+    watchFor: [
+      "Patch embeddings map dense 2D images to semantic tokens.",
+      "Attention layers aggregate these tokens to learn spatial dependencies.",
+      "The classification head makes the final decision on image class."
+    ],
+    studioTips: [
+      "Observe how patch embeddings project the input to higher dimensions.",
+      "Track the flow of backward propagation to the initial layers.",
+      "Inspect the attention weights to see what parts of the image are focused on."
+    ]
+  },
 ] as const;

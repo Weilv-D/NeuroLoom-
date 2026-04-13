@@ -1,6 +1,6 @@
 import type { TraceBundle, TraceFamily, TraceFrame } from "@neuroloom/core";
 
-export const officialTraceIds = ["spiral-2d-mlp", "fashion-mnist-cnn", "tiny-gpt-style-transformer"] as const;
+export const officialTraceIds = ["spiral-2d-mlp", "fashion-mnist-cnn", "tiny-gpt-style-transformer", "tiny-sota-vit"] as const;
 
 export type OfficialTraceId = (typeof officialTraceIds)[number];
 
@@ -20,7 +20,7 @@ const visualSemantics = {
 } satisfies TraceBundle["manifest"]["visual_semantics"];
 
 export function createOfficialTraceBundles(): TraceBundle[] {
-  return [createMlpTrace(), createCnnTrace(), createTransformerTrace()];
+  return [createMlpTrace(), createCnnTrace(), createTransformerTrace(), createViTTrace()];
 }
 
 export function createOfficialTraceBundle(id: OfficialTraceId): TraceBundle {
@@ -31,6 +31,8 @@ export function createOfficialTraceBundle(id: OfficialTraceId): TraceBundle {
       return createCnnTrace();
     case "tiny-gpt-style-transformer":
       return createTransformerTrace();
+    case "tiny-sota-vit":
+      return createViTTrace();
   }
 }
 
@@ -785,4 +787,97 @@ function clamp(value: number, min: number, max: number) {
 
 function round(value: number) {
   return Math.round(value * 1000) / 1000;
+}
+
+function createViTTrace(): TraceBundle {
+  const nodes: GraphNode[] = [
+    node("patch-embed", "Patch Embed", "embedding", 0, 0, -5, 0, 0, { patches: 16 }),
+    node("pos-embed", "Pos Embed", "embedding", 0, 1, -5, 2, 0, { cls_token: true }),
+    node("vit-l1-attn", "Attention L1", "attention", 1, 0, -2, 0, 0, { heads: 4 }),
+    node("vit-l1-mlp", "MLP L1", "mlp", 1, 1, 1, 0, 0, { expansion: 4 }),
+    node("vit-l2-attn", "Attention L2", "attention", 2, 0, 4, 0, 0, { heads: 4 }),
+    node("vit-l2-mlp", "MLP L2", "mlp", 2, 1, 7, 0, 0, { expansion: 4 }),
+    node("cls-head", "Classifier", "logits", 3, 0, 10, 0, 0, { classes: 3 }),
+  ];
+
+  const edges: GraphEdge[] = [
+    edge("e1", "patch-embed", "vit-l1-attn"),
+    edge("e2", "pos-embed", "vit-l1-attn"),
+    edge("e3", "vit-l1-attn", "vit-l1-mlp"),
+    edge("e4", "vit-l1-mlp", "vit-l2-attn"),
+    edge("e5", "vit-l2-attn", "vit-l2-mlp"),
+    edge("e6", "vit-l2-mlp", "cls-head"),
+  ];
+
+  const timeline: TraceFrame[] = [];
+  const payloads = new Map<string, string>();
+  const payloadCatalog: PayloadCatalogEntry[] = [];
+  const frameCount = 10;
+
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    const phase = frame < 5 ? "forward" : "backward";
+    const t = frame / (frameCount - 1);
+    const renderId = `vit-render-${frame}`;
+    const inspectId = `vit-inspect-${frame}`;
+
+    timeline.push({
+      frame_id: frame,
+      step: frame,
+      substep: 0,
+      phase,
+      camera_anchor: "overview",
+      node_states: nodes.map(n => nodeState(n.id, 0.5 + t * 0.2, phase === "backward" ? 0.9 : 0.7, inspectId)),
+      edge_states: edges.map(e => ({ edgeId: e.id, intensity: 0.5 + t * 0.2, direction: phase === "backward" ? "backward" : "forward", emphasis: 0.8 })),
+      metric_refs: [{ id: "accuracy", label: "Accuracy", value: 0.5 + t * 0.45 }],
+      payload_refs: [inspectId],
+    });
+
+    payloads.set(
+      inspectId,
+      JSON.stringify({
+        headline: "Tiny SOTA ViT processing",
+        series: [],
+        matrix: createMatrix(16, 16, (x, y) => Math.abs(x - y) < 0.2 ? 1 : 0),
+        tokens: [],
+        heads: [],
+        topTokens: [],
+        selectionDetails: {},
+      })
+    );
+
+    payloadCatalog.push(payloadEntry(inspectId, "inspect"));
+  }
+
+  return {
+    manifest: {
+      trace_version: "1.0.0",
+      family: "transformer",
+      model_id: "tiny-sota-vit",
+      dataset_id: "synthetic",
+      title: "Tiny SOTA Vision Transformer",
+      summary: "A GPU-accelerated miniature ViT model run.",
+      phase_set: ["forward", "backward"],
+      frame_count: frameCount,
+      camera_presets: [
+        camera("overview", "Overview", { x: 2, y: 3, z: 12 }, { x: 2, y: 0, z: 0 }, 32),
+      ],
+      visual_semantics: visualSemantics,
+      payload_catalog: payloadCatalog,
+      narrative_ref: "narrative.json",
+    },
+    graph: {
+      nodes,
+      edges,
+      rootNodeIds: ["patch-embed", "pos-embed"],
+    },
+    timeline,
+    narrative: {
+      intro: "This traces a miniaturized SOTA ViT through patch embedding, multihead attention, and classification.",
+      chapters: [
+        chapter("start", "Start", [0, 4], "patch-embed", "Forward processing through attention layers."),
+        chapter("end", "End", [5, 9], "cls-head", "Backward pass and gradient update."),
+      ],
+    },
+    payloads,
+  };
 }
