@@ -4,6 +4,8 @@ NeuroLoom is an open-source neural network execution replay interpreter designed
 
 It doesn't directly connect to arbitrary model runtimes, nor does it attempt to be a generic graph visualization platform. Instead, NeuroLoom reads controlled `.loomtrace` replay files and reconstructs a training or inference process into a highly cinematic 2.5D animated scene, ensuring that glowing effects, data flows, camera movements, and numeric inspections align perfectly to the same frame.
 
+*Read this in other languages: [English](README.md), [简体中文](README_zh.md)*
+
 ## Current Status
 
 The repository has completed the core v1 loop of NeuroLoom, showcasing advanced 2.5D physical rendering and strict testing methodologies.
