@@ -43,7 +43,7 @@ function SceneRoot({
   frame,
   camera,
   selection,
-  onSelect
+  onSelect,
 }: {
   bundle: TraceBundle;
   frame: TraceFrame;
@@ -83,7 +83,7 @@ function SceneRoot({
   }
 
   const focusPosition = selectedNodeId
-    ? nodeMap.get(selectedNodeId)?.position ?? null
+    ? (nodeMap.get(selectedNodeId)?.position ?? null)
     : selectedEdgeId
       ? getEdgeFocusPosition(bundle, selectedEdgeId, nodeMap)
       : null;
@@ -149,7 +149,7 @@ function FamilySignatureLayer({
   bundle,
   frame,
   payload,
-  nodeStateMap
+  nodeStateMap,
 }: {
   bundle: TraceBundle;
   frame: TraceFrame;
@@ -170,7 +170,7 @@ function FamilySignatureLayer({
 function CameraRig({
   position,
   target,
-  focusTarget
+  focusTarget,
 }: {
   position: { x: number; y: number; z: number };
   target: { x: number; y: number; z: number };
@@ -178,7 +178,7 @@ function CameraRig({
 }) {
   const { camera } = useThree();
   const baseTarget = useMemo(() => new THREE.Vector3(target.x, target.y, target.z), [target]);
-  const focusVector = useMemo(() => focusTarget ? new THREE.Vector3(focusTarget.x, focusTarget.y, focusTarget.z) : null, [focusTarget]);
+  const focusVector = useMemo(() => (focusTarget ? new THREE.Vector3(focusTarget.x, focusTarget.y, focusTarget.z) : null), [focusTarget]);
   const cameraVector = useMemo(() => new THREE.Vector3(position.x, position.y, position.z), [position]);
   const lookTargetRef = useMemo(() => new THREE.Vector3(), []);
 
@@ -194,13 +194,7 @@ function CameraRig({
   return null;
 }
 
-function SelectionAura({
-  family,
-  position
-}: {
-  family: TraceBundle["manifest"]["family"];
-  position: [number, number, number];
-}) {
+function SelectionAura({ family, position }: { family: TraceBundle["manifest"]["family"]; position: [number, number, number] }) {
   const ringScale = family === "transformer" ? 1.6 : family === "cnn" ? 1.2 : 1;
   const groupRef = useRef<THREE.Group>(null);
 
@@ -287,7 +281,7 @@ function EdgeFlow({
   from,
   to,
   state,
-  focus
+  focus,
 }: {
   family: TraceBundle["manifest"]["family"];
   from: [number, number, number];
@@ -311,7 +305,7 @@ function EdgeFlow({
     color: targetColor,
     width: targetWidth,
     opacity: targetOpacity,
-    config: { mass: 1, tension: 120, friction: 14 }
+    config: { mass: 1, tension: 120, friction: 14 },
   });
 
   if (family === "transformer" && Math.abs(from[1] - to[1]) > 1.2) {
@@ -339,7 +333,7 @@ function NodeGlyph({
   position,
   state,
   focus,
-  onClick
+  onClick,
 }: {
   family: TraceBundle["manifest"]["family"];
   label: string;
@@ -352,29 +346,25 @@ function NodeGlyph({
   const activation = state?.activation ?? 0;
   const emphasis = state?.emphasis ?? 0.3;
   const baseColor = activation >= 0 ? "#15f0ff" : "#ffb45b";
-  const targetHighlightColor =
-    focus === "selected"
-      ? "#d8ff66"
-      : focus === "related"
-        ? blendColor(baseColor, "#d8ff66", 0.18)
-        : baseColor;
+  const targetHighlightColor = focus === "selected" ? "#d8ff66" : focus === "related" ? blendColor(baseColor, "#d8ff66", 0.18) : baseColor;
   const focusScale = focus === "selected" ? 1.14 : focus === "related" ? 1.04 : focus === "muted" ? 0.9 : 1;
   const targetOpacity = focus === "muted" ? 0.28 : focus === "related" ? 0.82 : 0.92;
-  const targetEmissiveIntensity = focus === "selected" ? 2.25 + emphasis * 1.7 : focus === "related" ? 1.55 + emphasis * 1.35 : 0.9 + emphasis * 1.1;
+  const targetEmissiveIntensity =
+    focus === "selected" ? 2.25 + emphasis * 1.7 : focus === "related" ? 1.55 + emphasis * 1.35 : 0.9 + emphasis * 1.1;
   const sizeScale = (0.95 + emphasis * 0.55) * focusScale;
   const targetScale =
     family === "mlp"
-      ? [0.66 * sizeScale, 0.66 * sizeScale, 0.66 * sizeScale] as [number, number, number]
+      ? ([0.66 * sizeScale, 0.66 * sizeScale, 0.66 * sizeScale] as [number, number, number])
       : family === "cnn"
-        ? [1.05 * sizeScale, 0.42 * sizeScale, 0.28 + emphasis * 0.42] as [number, number, number]
-        : [1.22 * sizeScale, type === "token" ? 0.36 : 0.48, 0.18 + emphasis * 0.26] as [number, number, number];
+        ? ([1.05 * sizeScale, 0.42 * sizeScale, 0.28 + emphasis * 0.42] as [number, number, number])
+        : ([1.22 * sizeScale, type === "token" ? 0.36 : 0.48, 0.18 + emphasis * 0.26] as [number, number, number]);
 
   const { emissive, emissiveIntensity, opacity, groupScale } = useSpring({
     emissive: targetHighlightColor,
     emissiveIntensity: targetEmissiveIntensity,
     opacity: targetOpacity,
     groupScale: targetScale,
-    config: { mass: 1, tension: 150, friction: 18 }
+    config: { mass: 1, tension: 150, friction: 18 },
   });
 
   return (
@@ -430,15 +420,7 @@ function NodeGlyph({
   );
 }
 
-function AttentionRibbonLayer({
-  bundle,
-  payload,
-  selection
-}: {
-  bundle: TraceBundle;
-  payload: unknown;
-  selection: SelectionState;
-}) {
+function AttentionRibbonLayer({ bundle, payload, selection }: { bundle: TraceBundle; payload: unknown; selection: SelectionState }) {
   if (!payload || typeof payload !== "object" || !("matrix" in payload)) {
     return null;
   }
@@ -446,9 +428,7 @@ function AttentionRibbonLayer({
   const matrix = Array.isArray(payload.matrix) ? payload.matrix : null;
   if (!matrix) return null;
 
-  const tokens = bundle.graph.nodes
-    .filter((node) => node.type === "token")
-    .sort((left, right) => left.order - right.order);
+  const tokens = bundle.graph.nodes.filter((node) => node.type === "token").sort((left, right) => left.order - right.order);
   const selectedTokenId = selection?.kind === "node" ? selection.id : null;
 
   return (
@@ -476,7 +456,7 @@ function AttentionRibbonLayer({
               opacity={clamp((0.08 + weight * 0.28) * (dimmed ? 0.14 : focused ? 1.2 : 1), 0.03, 0.54)}
             />
           );
-        })
+        }),
       )}
     </group>
   );
@@ -485,11 +465,7 @@ function AttentionRibbonLayer({
 function MlpSignatureLayer({ frame, payload }: { frame: TraceFrame; payload: unknown }) {
   const matrix = readMatrix(payload);
   const series = readSeries(payload);
-  const focusStrength = clamp(
-    0.35 + (frame.metric_refs.find((metric) => metric.id === "confidence")?.value ?? 0.4) * 0.6,
-    0.25,
-    1
-  );
+  const focusStrength = clamp(0.35 + (frame.metric_refs.find((metric) => metric.id === "confidence")?.value ?? 0.4) * 0.6, 0.25, 1);
 
   return (
     <group>
@@ -528,16 +504,14 @@ function CnnSignatureLayer({ payload }: { payload: unknown }) {
 function TransformerSignatureLayer({
   bundle,
   payload,
-  nodeStateMap
+  nodeStateMap,
 }: {
   bundle: TraceBundle;
   payload: unknown;
   nodeStateMap: Map<string, TraceFrame["node_states"][number]>;
 }) {
   const series = readSeries(payload);
-  const tokens = bundle.graph.nodes
-    .filter((node) => node.type === "token")
-    .sort((left, right) => left.order - right.order);
+  const tokens = bundle.graph.nodes.filter((node) => node.type === "token").sort((left, right) => left.order - right.order);
 
   return (
     <group>
@@ -565,7 +539,7 @@ function TransformerSignatureLayer({
           >
             <meshStandardMaterial
               color="#08121d"
-              emissive={("#15f0ff")}
+              emissive={"#15f0ff"}
               emissiveIntensity={0.25 + emphasis * 0.45}
               transparent
               opacity={0.68}
@@ -581,15 +555,7 @@ function TransformerSignatureLayer({
   );
 }
 
-function MatrixPlane({
-  matrix,
-  cellSize,
-  depth
-}: {
-  matrix: number[][];
-  cellSize: number;
-  depth: number;
-}) {
+function MatrixPlane({ matrix, cellSize, depth }: { matrix: number[][]; cellSize: number; depth: number }) {
   const rows = matrix.length;
   const columns = matrix[0]?.length ?? 0;
   const xOffset = ((columns - 1) * cellSize) / 2;
@@ -612,21 +578,13 @@ function MatrixPlane({
               />
             </mesh>
           );
-        })
+        }),
       )}
     </group>
   );
 }
 
-function FeatureMapStack({
-  position,
-  matrix,
-  tint
-}: {
-  position: [number, number, number];
-  matrix: number[][];
-  tint: string;
-}) {
+function FeatureMapStack({ position, matrix, tint }: { position: [number, number, number]; matrix: number[][]; tint: string }) {
   const layers = [0, 1, 2];
   return (
     <group position={position}>
@@ -651,7 +609,7 @@ function FeatureMapStack({
 function SeriesBars3D({
   position,
   series,
-  color
+  color,
 }: {
   position: [number, number, number];
   series: Array<{ label: string; value: number }>;
@@ -665,7 +623,7 @@ function SeriesBars3D({
         return (
           <group key={item.label} position={[index * 0.4 - ((items.length - 1) * 0.4) / 2, height / 2, 0]}>
             <RoundedBox args={[0.22, height, 0.22]} radius={0.06} smoothness={4}>
-              <meshStandardMaterial color="#08111b" emissive={(color)} emissiveIntensity={0.7} transparent opacity={0.88} />
+              <meshStandardMaterial color="#08111b" emissive={color} emissiveIntensity={0.7} transparent opacity={0.88} />
             </RoundedBox>
           </group>
         );
@@ -693,7 +651,7 @@ function readMatrix(payload: unknown): number[][] {
       [0.2, 0.35, 0.5, 0.12],
       [0.1, -0.12, 0.28, 0.42],
       [-0.34, 0.22, 0.45, 0.18],
-      [0.15, 0.3, -0.18, 0.4]
+      [0.15, 0.3, -0.18, 0.4],
     ];
   }
 
@@ -707,7 +665,7 @@ function readSeries(payload: unknown): Array<{ label: string; value: number }> {
     return [
       { label: "signal", value: 0.42 },
       { label: "focus", value: 0.64 },
-      { label: "drift", value: 0.28 }
+      { label: "drift", value: 0.28 },
     ];
   }
 
@@ -747,11 +705,7 @@ function getEdgeFocusState(edgeId: string, selection: SelectionState, relatedEdg
   return relatedEdgeIds.has(edgeId) ? "related" : "muted";
 }
 
-function getEdgeFocusPosition(
-  bundle: TraceBundle,
-  edgeId: string,
-  nodeMap: Map<string, TraceBundle["graph"]["nodes"][number]>
-) {
+function getEdgeFocusPosition(bundle: TraceBundle, edgeId: string, nodeMap: Map<string, TraceBundle["graph"]["nodes"][number]>) {
   const edge = bundle.graph.edges.find((entry) => entry.id === edgeId);
   if (!edge) return null;
   const source = nodeMap.get(edge.source);
@@ -760,6 +714,6 @@ function getEdgeFocusPosition(
   return {
     x: (source.position.x + target.position.x) / 2,
     y: (source.position.y + target.position.y) / 2,
-    z: (source.position.z + target.position.z) / 2
+    z: (source.position.z + target.position.z) / 2,
   };
 }

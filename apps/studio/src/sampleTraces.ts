@@ -10,13 +10,13 @@ export const officialTraces = [
     watchFor: [
       "The brightest pulse shifts from the hidden layer into the output head during forward frames.",
       "The loss frame acts like a hard checkpoint before the backward pulse returns upstream.",
-      "Late update frames calm the stage while confidence rises and the decision plane sharpens."
+      "Late update frames calm the stage while confidence rises and the decision plane sharpens.",
     ],
     studioTips: [
       "Select `hidden-a` to inspect how one neuron tracks the outer spiral arc.",
       "Scrub around the loss frame to compare forward and backward edge direction changes.",
-      "Use PNG export near the final update frames to capture the cleanest composition."
-    ]
+      "Use PNG export near the final update frames to capture the cleanest composition.",
+    ],
   },
   {
     id: "fashion-mnist-cnn",
@@ -29,13 +29,13 @@ export const officialTraces = [
     watchFor: [
       "Early stages carry wide, soft activation plates that later compress into denser blocks.",
       "The feature-map mosaic becomes more stable as the classifier head gains confidence.",
-      "Backward frames reveal which stages are still noisy and which already hold stable evidence."
+      "Backward frames reveal which stages are still noisy and which already hold stable evidence.",
     ],
     studioTips: [
       "Select `conv-2` to inspect later-stage texture compression and lower entropy.",
       "Pause on `pool-2` to compare compression metrics against the feature-map matrix.",
-      "Export a frame from the classifier chapter for the clearest stage-to-head composition."
-    ]
+      "Export a frame from the classifier chapter for the clearest stage-to-head composition.",
+    ],
   },
   {
     id: "tiny-gpt-style-transformer",
@@ -48,12 +48,12 @@ export const officialTraces = [
     watchFor: [
       "Attention ribbons start broad, then tighten toward the most relevant token relationships.",
       "The residual band keeps information visible between attention and MLP sublayers.",
-      "Decode frames show confidence climbing while entropy drops in the logits head."
+      "Decode frames show confidence climbing while entropy drops in the logits head.",
     ],
     studioTips: [
       "Select `attn` to inspect the attention matrix as it sharpens across decode frames.",
       "Compare `residual` and `logits` selections to see how focus moves from transport to decision.",
-      "Use chapter jumps to isolate token rail, attention, and decode-head compositions."
-    ]
-  }
+      "Use chapter jumps to isolate token rail, attention, and decode-head compositions.",
+    ],
+  },
 ] as const;

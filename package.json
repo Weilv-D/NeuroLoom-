@@ -12,15 +12,14 @@
     "test:release": "pnpm test && pnpm test:visual",
     "test:visual": "pnpm build && playwright test",
     "test:visual:update": "pnpm build && playwright test --update-snapshots",
-    "validate:samples": "pnpm generate:traces && pnpm --filter @neuroloom/core loomtrace ../../apps/studio/public/traces/spiral-2d-mlp.loomtrace ../../apps/studio/public/traces/fashion-mnist-cnn.loomtrace ../../apps/studio/public/traces/tiny-gpt-style-transformer.loomtrace"
+    "validate:samples": "pnpm generate:traces && pnpm --filter @neuroloom/core loomtrace ../../apps/studio/public/traces/spiral-2d-mlp.loomtrace ../../apps/studio/public/traces/fashion-mnist-cnn.loomtrace ../../apps/studio/public/traces/tiny-gpt-style-transformer.loomtrace",
+    "lint": "eslint apps packages",
+    "format": "prettier --write \"apps/**/*.ts\" \"apps/**/*.tsx\" \"packages/**/*.ts\" \"tools/**/*.ts\"",
+    "format:check": "prettier --check \"apps/**/*.ts\" \"apps/**/*.tsx\" \"packages/**/*.ts\" \"tools/**/*.ts\""
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.59.1",
-    "@react-spring/three": "^9.7.5",
-    "@types/d3-scale": "^4.0.9",
-    "@types/node": "^22.19.17",
-    "@types/three": "^0.176.0",
     "eslint": "^10.2.0",
     "globals": "^17.5.0",
     "prettier": "^3.8.2",

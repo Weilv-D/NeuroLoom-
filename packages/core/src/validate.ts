@@ -1,31 +1,12 @@
-import {
-  type TraceBundle,
-  type TraceFamily,
-  frameSchema,
-  graphSchema,
-  manifestSchema,
-  narrativeSchema
-} from "./schema.js";
+import { type TraceBundle, type TraceFamily, frameSchema, graphSchema, manifestSchema, narrativeSchema } from "./schema.js";
 
 const familyNodeTypeAllowlist: Record<TraceFamily, Set<string>> = {
   mlp: new Set(["input", "linear", "activation", "output", "loss"]),
   cnn: new Set(["input", "conv", "norm", "activation", "pool", "dense", "output", "loss", "stage"]),
-  transformer: new Set([
-    "token",
-    "embedding",
-    "attention",
-    "residual",
-    "mlp",
-    "norm",
-    "logits",
-    "loss",
-    "decode"
-  ])
+  transformer: new Set(["token", "embedding", "attention", "residual", "mlp", "norm", "logits", "loss", "decode"]),
 };
 
-export type ValidationResult =
-  | { ok: true; family: TraceFamily; warnings: string[] }
-  | { ok: false; errors: string[]; warnings: string[] };
+export type ValidationResult = { ok: true; family: TraceFamily; warnings: string[] } | { ok: false; errors: string[]; warnings: string[] };
 
 export function validateTraceBundle(input: unknown): ValidationResult {
   const warnings: string[] = [];
@@ -35,7 +16,7 @@ export function validateTraceBundle(input: unknown): ValidationResult {
     return {
       ok: false,
       errors: manifestResult.error.issues.map((issue) => `manifest.${issue.path.join(".")}: ${issue.message}`),
-      warnings
+      warnings,
     };
   }
 
@@ -44,7 +25,7 @@ export function validateTraceBundle(input: unknown): ValidationResult {
     return {
       ok: false,
       errors: graphResult.error.issues.map((issue) => `graph.${issue.path.join(".")}: ${issue.message}`),
-      warnings
+      warnings,
     };
   }
 
@@ -53,7 +34,7 @@ export function validateTraceBundle(input: unknown): ValidationResult {
     return {
       ok: false,
       errors: narrativeResult.error.issues.map((issue) => `narrative.${issue.path.join(".")}: ${issue.message}`),
-      warnings
+      warnings,
     };
   }
 
@@ -63,9 +44,7 @@ export function validateTraceBundle(input: unknown): ValidationResult {
 
   const timelineErrors = bundle.timeline.flatMap((frame, index) => {
     const result = frameSchema.safeParse(frame);
-    return result.success
-      ? []
-      : result.error.issues.map((issue) => `timeline[${index}].${issue.path.join(".")}: ${issue.message}`);
+    return result.success ? [] : result.error.issues.map((issue) => `timeline[${index}].${issue.path.join(".")}: ${issue.message}`);
   });
 
   if (timelineErrors.length > 0) {
@@ -122,9 +101,7 @@ export function validateTraceBundle(input: unknown): ValidationResult {
   });
 
   if (timeline.length !== manifest.frame_count) {
-    semanticErrors.push(
-      `manifest.frame_count: expected ${manifest.frame_count}, received ${timeline.length} timeline frames`
-    );
+    semanticErrors.push(`manifest.frame_count: expected ${manifest.frame_count}, received ${timeline.length} timeline frames`);
   }
 
   narrative.chapters.forEach((chapter) => {

@@ -3,6 +3,8 @@ import { startTransition, useDeferredValue, useEffect, useId, useRef, useState }
 import { scaleLinear } from "d3-scale";
 
 import { SceneCanvas } from "./SceneCanvas";
+
+const PLAYBACK_INTERVAL_MS = 520;
 import { officialTraces } from "./sampleTraces";
 import { type SelectionState, useStudioStore } from "./state";
 import { loadTraceFromFile, loadTraceFromUrl } from "./traceLoader";
@@ -38,7 +40,7 @@ export function App() {
     setSelection,
     toggleFreezeSelection,
     clearFrozenSelection,
-    jumpToChapter
+    jumpToChapter,
   } = useStudioStore();
   const uploadId = useId();
   const stageFrameRef = useRef<HTMLDivElement | null>(null);
@@ -88,7 +90,7 @@ export function App() {
         return;
       }
       state.step(1);
-    }, 520);
+    }, PLAYBACK_INTERVAL_MS);
 
     return () => window.clearInterval(intervalId);
   }, [playing, engine]);
@@ -158,12 +160,15 @@ export function App() {
   const deferredFrame = useDeferredValue(frame);
   const currentChapter =
     bundle?.narrative.chapters.find((chapter) => chapter.id === activeChapterId) ??
-    (engine ? engine.getChapterForFrame(frameIndex) ?? null : null);
-  const activeTrace = officialTraces.find((trace) => trace.id === traceId) ?? officialTraces.find((trace) => trace.family === bundle?.manifest.family);
-  const currentChapterIndex = currentChapter && bundle ? bundle.narrative.chapters.findIndex((chapter) => chapter.id === currentChapter.id) : -1;
+    (engine ? (engine.getChapterForFrame(frameIndex) ?? null) : null);
+  const activeTrace =
+    officialTraces.find((trace) => trace.id === traceId) ?? officialTraces.find((trace) => trace.family === bundle?.manifest.family);
+  const currentChapterIndex =
+    currentChapter && bundle ? bundle.narrative.chapters.findIndex((chapter) => chapter.id === currentChapter.id) : -1;
   const renderPayloadId =
     bundle && deferredFrame
-      ? bundle.manifest.payload_catalog.find((entry) => entry.kind === "render" && deferredFrame.payload_refs.includes(entry.id))?.id ?? null
+      ? (bundle.manifest.payload_catalog.find((entry) => entry.kind === "render" && deferredFrame.payload_refs.includes(entry.id))?.id ??
+        null)
       : null;
   const renderPayload = bundle && renderPayloadId ? parsePayload(bundle.payloads.get(renderPayloadId)) : null;
   const sceneSelection = frozenSelection ?? selection;
@@ -179,7 +184,7 @@ export function App() {
     if (!traceId || !engine) return;
     const currentFrame = engine.getFrame(frameIndex);
     if (!currentFrame) return;
-    
+
     const canvas = stageFrameRef.current?.querySelector("canvas");
     if (!(canvas instanceof HTMLCanvasElement)) {
       console.warn("Snapshot export failed: stage canvas is unavailable.");
@@ -206,8 +211,8 @@ export function App() {
           <h1>Neural networks, replayed as a precise 2.5D stage.</h1>
           <p className="hero-text">
             NeuroLoom is a replay-first explainer for <code>MLP</code>, <code>CNN</code>, and standard
-            <code> GPT-style Transformer</code> traces. It reconstructs one training or inference run into a
-            controllable visual scene where glow, motion, and numeric truth stay in sync.
+            <code> GPT-style Transformer</code> traces. It reconstructs one training or inference run into a controllable visual scene where
+            glow, motion, and numeric truth stay in sync.
           </p>
           <div className="hero-definition">
             <span>Definition</span>
@@ -261,7 +266,12 @@ export function App() {
           ) : null}
         </div>
         <div className="toolbar__group">
-          <button type="button" className={frozenSelection ? "chip is-active" : "chip"} onClick={() => toggleFreezeSelection()} disabled={!selection && !frozenSelection}>
+          <button
+            type="button"
+            className={frozenSelection ? "chip is-active" : "chip"}
+            onClick={() => toggleFreezeSelection()}
+            disabled={!selection && !frozenSelection}
+          >
             {frozenSelection ? "Unfreeze Focus" : "Freeze Focus"}
           </button>
           <button type="button" className="chip chip--ghost" onClick={() => clearFrozenSelection()} disabled={!frozenSelection}>
@@ -325,7 +335,9 @@ export function App() {
                       <button
                         key={chapter.id}
                         type="button"
-                        className={chapter.id === currentChapter?.id ? "stack-item is-active stack-item--story" : "stack-item stack-item--story"}
+                        className={
+                          chapter.id === currentChapter?.id ? "stack-item is-active stack-item--story" : "stack-item stack-item--story"
+                        }
                         onClick={() => jumpToChapter(chapter.id)}
                       >
                         <div>
@@ -502,7 +514,7 @@ function TimelineBar({
   onTogglePlay,
   onExport,
   onPrevChapter,
-  onNextChapter
+  onNextChapter,
 }: {
   frame: TraceFrame;
   frameIndex: number;
@@ -564,7 +576,7 @@ function TimelineBar({
 function StructureList({
   bundle,
   selection,
-  onSelect
+  onSelect,
 }: {
   bundle: TraceBundle;
   selection: SelectionState;
@@ -603,7 +615,7 @@ function InspectorPanel({
   selection,
   chapter,
   activeTrace,
-  onSelect
+  onSelect,
 }: {
   bundle: TraceBundle;
   frame: TraceFrame;
@@ -692,7 +704,7 @@ function TransformerAttentionPanel({
   bundle,
   payload,
   selection,
-  onSelect
+  onSelect,
 }: {
   bundle: TraceBundle;
   payload: Record<string, unknown> | null;
@@ -705,8 +717,7 @@ function TransformerAttentionPanel({
         const id = "id" in head && typeof head.id === "string" ? head.id : "head";
         const label = "label" in head && typeof head.label === "string" ? head.label : id;
         const matrix = "matrix" in head && Array.isArray(head.matrix) ? (head.matrix as number[][]) : [];
-        const focusTokenIndex =
-          "focusTokenIndex" in head && typeof head.focusTokenIndex === "number" ? head.focusTokenIndex : 0;
+        const focusTokenIndex = "focusTokenIndex" in head && typeof head.focusTokenIndex === "number" ? head.focusTokenIndex : 0;
         const score = "score" in head && typeof head.score === "number" ? head.score : null;
         return [{ id, label, matrix, focusTokenIndex, score }];
       })
@@ -740,7 +751,7 @@ function TransformerAttentionPanel({
     selectedHead && selectedHead.matrix[selectedTokenIndex]
       ? selectedHead.matrix[selectedTokenIndex]!.map((value, index) => ({
           token: tokens[index] ?? `token-${index}`,
-          value
+          value,
         }))
       : [];
 
@@ -895,13 +906,7 @@ function MlpBoundaryPanel({ payload }: { payload: Record<string, unknown> | null
   );
 }
 
-function CnnFeaturePanel({
-  payload,
-  onSelect
-}: {
-  payload: Record<string, unknown> | null;
-  onSelect(selection: SelectionState): void;
-}) {
+function CnnFeaturePanel({ payload, onSelect }: { payload: Record<string, unknown> | null; onSelect(selection: SelectionState): void }) {
   const stages = Array.isArray(payload?.stages)
     ? payload.stages.flatMap((stage) => {
         if (!stage || typeof stage !== "object") return [];
@@ -934,7 +939,8 @@ function CnnFeaturePanel({
   const [selectedStageIndex, setSelectedStageIndex] = useState(0);
   const selectedStage = stages[Math.min(selectedStageIndex, Math.max(stages.length - 1, 0))] ?? null;
   const [selectedChannelIndex, setSelectedChannelIndex] = useState(0);
-  const selectedChannel = selectedStage?.channels[Math.min(selectedChannelIndex, Math.max((selectedStage?.channels.length ?? 1) - 1, 0))] ?? null;
+  const selectedChannel =
+    selectedStage?.channels[Math.min(selectedChannelIndex, Math.max((selectedStage?.channels.length ?? 1) - 1, 0))] ?? null;
 
   useEffect(() => {
     setSelectedChannelIndex(0);
@@ -1024,7 +1030,7 @@ function FamilyFocusPanel({
   selection,
   onSelect,
   payload,
-  activeTrace
+  activeTrace,
 }: {
   bundle: TraceBundle;
   selection: SelectionState;
@@ -1042,7 +1048,9 @@ function FamilyFocusPanel({
         <span>Family Focus</span>
         <strong>{bundle.manifest.family}</strong>
       </header>
-      <p className="muted-copy">{activeTrace?.studioTips[0] ?? "Use these shortcuts to jump between the most meaningful nodes for this model family."}</p>
+      <p className="muted-copy">
+        {activeTrace?.studioTips[0] ?? "Use these shortcuts to jump between the most meaningful nodes for this model family."}
+      </p>
       <div className="focus-groups">
         {groups.map((group) => (
           <div key={group.label} className="focus-group">
@@ -1065,9 +1073,19 @@ function FamilyFocusPanel({
       <div className="family-slice">
         <div className="family-slice__meta">
           <span>{headline}</span>
-          <strong>{bundle.manifest.family === "transformer" ? "attention slice" : bundle.manifest.family === "cnn" ? "feature slice" : "decision slice"}</strong>
+          <strong>
+            {bundle.manifest.family === "transformer"
+              ? "attention slice"
+              : bundle.manifest.family === "cnn"
+                ? "feature slice"
+                : "decision slice"}
+          </strong>
         </div>
-        {matrix ? <MatrixHeatmap matrix={matrix.slice(0, 5).map((row) => row.slice(0, 5))} /> : <p className="muted-copy">No matrix payload.</p>}
+        {matrix ? (
+          <MatrixHeatmap matrix={matrix.slice(0, 5).map((row) => row.slice(0, 5))} />
+        ) : (
+          <p className="muted-copy">No matrix payload.</p>
+        )}
       </div>
     </section>
   );
@@ -1078,7 +1096,7 @@ function StoryPanel({
   frame,
   chapter,
   activeTraceTitle,
-  watchFor
+  watchFor,
 }: {
   bundle: TraceBundle;
   frame: TraceFrame;
@@ -1137,7 +1155,7 @@ function StoryPanel({
 function RenderLens({
   payload,
   family,
-  mode
+  mode,
 }: {
   payload: Record<string, unknown> | null;
   family: TraceBundle["manifest"]["family"];
@@ -1203,7 +1221,7 @@ function getFamilyFocusGroups(bundle: TraceBundle) {
     return [
       { label: "Inputs", items: take(["input-x", "input-y"]) },
       { label: "Hidden", items: take(["hidden-a", "hidden-b", "hidden-c", "mix-a", "mix-b"]) },
-      { label: "Readout", items: take(["output", "loss"]) }
+      { label: "Readout", items: take(["output", "loss"]) },
     ].filter((group) => group.items.length > 0);
   }
 
@@ -1211,14 +1229,14 @@ function getFamilyFocusGroups(bundle: TraceBundle) {
     return [
       { label: "Image + Stage", items: take(["image", "stage-1", "stage-2"]) },
       { label: "Feature Maps", items: take(["conv-1", "pool-1", "conv-2", "pool-2"]) },
-      { label: "Head", items: take(["dense", "output", "loss"]) }
+      { label: "Head", items: take(["dense", "output", "loss"]) },
     ].filter((group) => group.items.length > 0);
   }
 
   return [
     { label: "Tokens", items: take(["token-bos", "token-neuro", "token-loom", "token-glows"]) },
     { label: "Block", items: take(["embed", "attn", "residual", "mlp", "norm"]) },
-    { label: "Decode", items: take(["logits", "decode"]) }
+    { label: "Decode", items: take(["logits", "decode"]) },
   ].filter((group) => group.items.length > 0);
 }
 
@@ -1255,7 +1273,7 @@ function MatrixHeatmap({ matrix }: { matrix: number[][] }) {
     <div
       className="matrix-heatmap"
       style={{
-        gridTemplateColumns: `repeat(${matrix[0]?.length ?? 1}, minmax(0, 1fr))`
+        gridTemplateColumns: `repeat(${matrix[0]?.length ?? 1}, minmax(0, 1fr))`,
       }}
     >
       {matrix.flatMap((row, rowIndex) =>
@@ -1266,7 +1284,7 @@ function MatrixHeatmap({ matrix }: { matrix: number[][] }) {
             title={String(value)}
             style={{ backgroundColor: scale(value) }}
           />
-        ))
+        )),
       )}
     </div>
   );
@@ -1294,7 +1312,7 @@ async function detectBrowserRuntime(): Promise<BrowserRuntimeState> {
       label: "Browser regen • WebGPU ready",
       detail: "Official traces can be rebuilt locally, and WebGPU is available for future browser-side official runtimes.",
       webgl,
-      webgpu
+      webgpu,
     };
   }
 
@@ -1303,7 +1321,7 @@ async function detectBrowserRuntime(): Promise<BrowserRuntimeState> {
       label: "Browser regen • WebGL",
       detail: "Official traces can be rebuilt locally in this browser. Scene rendering stays on the stable WebGL path.",
       webgl,
-      webgpu
+      webgpu,
     };
   }
 
@@ -1311,14 +1329,17 @@ async function detectBrowserRuntime(): Promise<BrowserRuntimeState> {
     label: "Limited browser runtime",
     detail: "Replay still works, but browser-side regeneration and graphics acceleration are constrained in this environment.",
     webgl,
-    webgpu
+    webgpu,
   };
 }
 
 function canUseWebgl() {
   if (typeof document === "undefined") return false;
   const canvas = document.createElement("canvas");
-  return Boolean(canvas.getContext("webgl") || canvas.getContext("experimental-webgl"));
+  const supported = Boolean(canvas.getContext("webgl") || canvas.getContext("experimental-webgl"));
+  canvas.width = 0;
+  canvas.height = 0;
+  return supported;
 }
 
 function formatSelectionLabel(bundle: TraceBundle, selection: SelectionState) {

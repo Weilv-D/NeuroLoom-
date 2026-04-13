@@ -21,8 +21,8 @@ export default defineConfig({
             return "d3";
           }
           return undefined;
-        }
-      }
-    }
-  }
+        },
+      },
+    },
+  },
 });

@@ -18,8 +18,8 @@ const baseBundle = {
         label: "Overview",
         position: { x: 0, y: 2, z: 8 },
         target: { x: 0, y: 0, z: 0 },
-        fov: 40
-      }
+        fov: 40,
+      },
     ],
     visual_semantics: {
       positive: "#0cf2ff",
@@ -27,10 +27,10 @@ const baseBundle = {
       focus: "#dcff66",
       neutral: "#eef2ff",
       bloomStrength: 1.2,
-      fogDensity: 0.04
+      fogDensity: 0.04,
     },
     payload_catalog: [{ id: "payload", kind: "render", mimeType: "application/json", path: "payload/test.json" }],
-    narrative_ref: "narrative.json"
+    narrative_ref: "narrative.json",
   },
   graph: {
     nodes: [
@@ -41,11 +41,11 @@ const baseBundle = {
         layerIndex: 0,
         order: 0,
         position: { x: 0, y: 0, z: 0 },
-        metadata: {}
-      }
+        metadata: {},
+      },
     ],
     edges: [],
-    rootNodeIds: ["input"]
+    rootNodeIds: ["input"],
   },
   timeline: [
     {
@@ -57,14 +57,14 @@ const baseBundle = {
       node_states: [{ nodeId: "input", activation: 0.4, emphasis: 0.5, payloadRef: "payload" }],
       edge_states: [],
       metric_refs: [{ id: "loss", label: "Loss", value: 0.5 }],
-      payload_refs: ["payload"]
-    }
+      payload_refs: ["payload"],
+    },
   ],
   narrative: {
     intro: "Intro",
-    chapters: [{ id: "c1", label: "Start", frameRange: [0, 0], description: "desc", defaultSelection: "input" }]
+    chapters: [{ id: "c1", label: "Start", frameRange: [0, 0], description: "desc", defaultSelection: "input" }],
   },
-  payloads: new Map([["payload", JSON.stringify({ values: [0.1, 0.2] })]])
+  payloads: new Map([["payload", JSON.stringify({ values: [0.1, 0.2] })]]),
 };
 
 describe("validateTraceBundle", () => {
@@ -78,8 +78,8 @@ describe("validateTraceBundle", () => {
       ...baseBundle,
       graph: {
         ...baseBundle.graph,
-        nodes: [{ ...baseBundle.graph.nodes[0], type: "attention" }]
-      }
+        nodes: [{ ...baseBundle.graph.nodes[0], type: "attention" }],
+      },
     });
 
     expect(result.ok).toBe(false);

@@ -18,8 +18,8 @@ const sampleBundle = {
         label: "Overview",
         position: { x: 0, y: 1, z: 7 },
         target: { x: 0, y: 0, z: 0 },
-        fov: 35
-      }
+        fov: 35,
+      },
     ],
     visual_semantics: {
       positive: "#15f0ff",
@@ -27,13 +27,13 @@ const sampleBundle = {
       focus: "#d8ff66",
       neutral: "#eef2ff",
       bloomStrength: 1.2,
-      fogDensity: 0.04
+      fogDensity: 0.04,
     },
     payload_catalog: [
       { id: "render-0", kind: "render" as const, mimeType: "application/json", path: "payload/render-0.json" },
-      { id: "inspect-0", kind: "inspect" as const, mimeType: "application/json", path: "payload/inspect-0.json" }
+      { id: "inspect-0", kind: "inspect" as const, mimeType: "application/json", path: "payload/inspect-0.json" },
     ],
-    narrative_ref: "narrative.json"
+    narrative_ref: "narrative.json",
   },
   graph: {
     nodes: [
@@ -44,7 +44,7 @@ const sampleBundle = {
         layerIndex: 0,
         order: 0,
         position: { x: -2, y: 0, z: 0 },
-        metadata: {}
+        metadata: {},
       },
       {
         id: "output",
@@ -53,11 +53,11 @@ const sampleBundle = {
         layerIndex: 1,
         order: 0,
         position: { x: 2, y: 0, z: 0 },
-        metadata: {}
-      }
+        metadata: {},
+      },
     ],
     edges: [{ id: "edge-0", source: "input", target: "output", type: "flow", weight: 1 }],
-    rootNodeIds: ["input"]
+    rootNodeIds: ["input"],
   },
   timeline: [
     {
@@ -68,12 +68,12 @@ const sampleBundle = {
       camera_anchor: "overview",
       node_states: [
         { nodeId: "input", activation: 0.6, emphasis: 0.6, payloadRef: "inspect-0" },
-        { nodeId: "output", activation: 0.1, emphasis: 0.4, payloadRef: "inspect-0" }
+        { nodeId: "output", activation: 0.1, emphasis: 0.4, payloadRef: "inspect-0" },
       ],
       edge_states: [{ edgeId: "edge-0", intensity: 0.7, direction: "forward" as const, emphasis: 0.5 }],
       metric_refs: [{ id: "loss", label: "Loss", value: 0.9 }],
       payload_refs: ["render-0", "inspect-0"],
-      note: "forward pulse"
+      note: "forward pulse",
     },
     {
       frame_id: 1,
@@ -83,22 +83,22 @@ const sampleBundle = {
       camera_anchor: "overview",
       node_states: [
         { nodeId: "input", activation: 0.2, emphasis: 0.3, payloadRef: "inspect-0" },
-        { nodeId: "output", activation: 0.9, emphasis: 0.9, payloadRef: "inspect-0" }
+        { nodeId: "output", activation: 0.9, emphasis: 0.9, payloadRef: "inspect-0" },
       ],
       edge_states: [{ edgeId: "edge-0", intensity: 0.4, direction: "forward" as const, emphasis: 0.4 }],
       metric_refs: [{ id: "loss", label: "Loss", value: 0.4 }],
       payload_refs: ["render-0", "inspect-0"],
-      note: "loss anchor"
-    }
+      note: "loss anchor",
+    },
   ],
   narrative: {
     intro: "intro",
-    chapters: [{ id: "start", label: "Start", frameRange: [0, 1] as [number, number], defaultSelection: "input", description: "desc" }]
+    chapters: [{ id: "start", label: "Start", frameRange: [0, 1] as [number, number], defaultSelection: "input", description: "desc" }],
   },
   payloads: new Map([
     ["render-0", JSON.stringify({ matrix: [[0.1, 0.2]] })],
-    ["inspect-0", JSON.stringify({ headline: "Inspect", series: [{ label: "loss", value: 0.4 }] })]
-  ])
+    ["inspect-0", JSON.stringify({ headline: "Inspect", series: [{ label: "loss", value: 0.4 }] })],
+  ]),
 };
 
 describe("loomtrace archive", () => {

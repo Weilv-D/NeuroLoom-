@@ -9,7 +9,7 @@ export type TracePhase = (typeof supportedPhases)[number];
 export const vector3Schema = z.object({
   x: z.number(),
   y: z.number(),
-  z: z.number()
+  z: z.number(),
 });
 
 export const cameraPresetSchema = z.object({
@@ -17,7 +17,7 @@ export const cameraPresetSchema = z.object({
   label: z.string(),
   position: vector3Schema,
   target: vector3Schema,
-  fov: z.number().min(10).max(120)
+  fov: z.number().min(10).max(120),
 });
 
 export const visualSemanticsSchema = z.object({
@@ -26,14 +26,14 @@ export const visualSemanticsSchema = z.object({
   focus: z.string(),
   neutral: z.string(),
   bloomStrength: z.number().min(0),
-  fogDensity: z.number().min(0)
+  fogDensity: z.number().min(0),
 });
 
 export const payloadCatalogEntrySchema = z.object({
   id: z.string(),
   kind: z.enum(["render", "inspect"]),
   mimeType: z.string(),
-  path: z.string()
+  path: z.string(),
 });
 
 export const manifestSchema = z.object({
@@ -48,7 +48,7 @@ export const manifestSchema = z.object({
   camera_presets: z.array(cameraPresetSchema).min(1),
   visual_semantics: visualSemanticsSchema,
   payload_catalog: z.array(payloadCatalogEntrySchema),
-  narrative_ref: z.string()
+  narrative_ref: z.string(),
 });
 
 export const graphNodeSchema = z.object({
@@ -58,7 +58,7 @@ export const graphNodeSchema = z.object({
   layerIndex: z.number().int().nonnegative(),
   order: z.number().int().nonnegative(),
   position: vector3Schema,
-  metadata: z.record(z.union([z.string(), z.number(), z.boolean()])).default({})
+  metadata: z.record(z.union([z.string(), z.number(), z.boolean()])).default({}),
 });
 
 export const graphEdgeSchema = z.object({
@@ -66,34 +66,34 @@ export const graphEdgeSchema = z.object({
   source: z.string(),
   target: z.string(),
   type: z.string(),
-  weight: z.number().default(1)
+  weight: z.number().default(1),
 });
 
 export const graphSchema = z.object({
   nodes: z.array(graphNodeSchema).min(1),
   edges: z.array(graphEdgeSchema),
-  rootNodeIds: z.array(z.string()).min(1)
+  rootNodeIds: z.array(z.string()).min(1),
 });
 
 export const metricSchema = z.object({
   id: z.string(),
   label: z.string(),
   value: z.number(),
-  unit: z.string().optional()
+  unit: z.string().optional(),
 });
 
 export const nodeStateSchema = z.object({
   nodeId: z.string(),
   activation: z.number(),
   emphasis: z.number().min(0).max(1),
-  payloadRef: z.string().optional()
+  payloadRef: z.string().optional(),
 });
 
 export const edgeStateSchema = z.object({
   edgeId: z.string(),
   intensity: z.number(),
   direction: z.enum(["forward", "backward", "neutral"]),
-  emphasis: z.number().min(0).max(1)
+  emphasis: z.number().min(0).max(1),
 });
 
 export const frameSchema = z.object({
@@ -106,7 +106,7 @@ export const frameSchema = z.object({
   edge_states: z.array(edgeStateSchema),
   metric_refs: z.array(metricSchema),
   payload_refs: z.array(z.string()),
-  note: z.string().optional()
+  note: z.string().optional(),
 });
 
 export const narrativeChapterSchema = z.object({
@@ -114,12 +114,12 @@ export const narrativeChapterSchema = z.object({
   label: z.string(),
   frameRange: z.tuple([z.number().int().nonnegative(), z.number().int().nonnegative()]),
   defaultSelection: z.string().optional(),
-  description: z.string()
+  description: z.string(),
 });
 
 export const narrativeSchema = z.object({
   intro: z.string(),
-  chapters: z.array(narrativeChapterSchema).min(1)
+  chapters: z.array(narrativeChapterSchema).min(1),
 });
 
 export type TraceManifest = z.infer<typeof manifestSchema>;

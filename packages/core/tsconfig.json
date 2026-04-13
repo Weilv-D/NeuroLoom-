@@ -5,7 +5,8 @@
     "outDir": "dist",
     "declaration": true,
     "emitDeclarationOnly": false,
-    "noEmit": false
+    "noEmit": false,
+    "types": ["node"]
   },
   "include": ["src"]
 }

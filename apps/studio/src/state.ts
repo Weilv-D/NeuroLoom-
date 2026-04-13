@@ -64,7 +64,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       playing: false,
       activeChapterId: firstChapter?.id ?? null,
       frozenSelection: null,
-      selection: firstChapter?.defaultSelection ? { id: firstChapter.defaultSelection, kind: "node" } : null
+      selection: firstChapter?.defaultSelection ? { id: firstChapter.defaultSelection, kind: "node" } : null,
     });
   },
   failLoading(message) {
@@ -77,7 +77,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     const chapter = engine.getChapterForFrame(frameIndex);
     set({
       frameIndex,
-      activeChapterId: chapter?.id ?? null
+      activeChapterId: chapter?.id ?? null,
     });
   },
   step(delta) {
@@ -120,7 +120,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       activeChapterId: chapter.id,
       frozenSelection: null,
       selection: chapter.defaultSelection ? { id: chapter.defaultSelection, kind: "node" } : null,
-      playing: false
+      playing: false,
     });
-  }
+  },
 }));

@@ -16,7 +16,7 @@ async function readTextFile(zip: JSZip, path: string): Promise<string> {
 function writeArchiveFile(zip: JSZip, path: string, data: string | Uint8Array) {
   zip.file(path, data, {
     date: ARCHIVE_DATE,
-    unixPermissions: 0o644
+    unixPermissions: 0o644,
   });
 }
 
@@ -36,7 +36,7 @@ export async function loadLoomTraceArchive(input: ArrayBuffer | Uint8Array): Pro
     manifest.payload_catalog.map(async (entry) => {
       const text = await readTextFile(zip, entry.path);
       payloads.set(entry.id, text);
-    })
+    }),
   );
 
   const previewFile = zip.file("preview.webp");
@@ -48,7 +48,7 @@ export async function loadLoomTraceArchive(input: ArrayBuffer | Uint8Array): Pro
     timeline,
     narrative,
     payloads,
-    preview
+    preview,
   };
 
   const validation = validateTraceBundle(bundle);
