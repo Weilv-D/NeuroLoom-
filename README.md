@@ -17,13 +17,13 @@ The repository has completed the core v1 loop of NeuroLoom, showcasing advanced 
 - `Replay-first` workflow supporting three official model families: `mlp`, `cnn`, `transformer`.
 - Three official content traces: `spiral-2d-mlp`, `fashion-mnist-cnn`, `tiny-gpt-style-transformer`.
 - Dual modes: `Story Mode` and `Studio Mode`.
+- **ONNX Runtime Web + WebGPU** browser-side inference — real tiny ONNX models (MLP, CNN, Transformer) run inside the browser. Activations, feature maps, and attention weights come from genuine forward passes rather than synthetic data. Falls back to WASM when WebGPU is unavailable.
+- **Isolated freeze workflow** — selecting a node or edge then freezing it (`F` key or toolbar) locks the camera and inspector to that element while all unrelated nodes and edges fade to near-invisibility. Press `Esc` to unfreeze.
 - Strict End-to-End visual regression testing via **Playwright** using unambiguous `data-testid` selectors.
 - Comprehensive formatting and linting pipeline (ESLint, Prettier).
 - Replay Engine, robust payload decoding, and trace validators.
 
 **Planned but unfinished:**
-- In-browser official trace reconstruction leveraging `ONNX Runtime Web + WebGPU`.
-- Isolated "freeze" workflow for specific visual regions.
 - Public documentation site and standardized open-source distribution wrappers.
 
 NeuroLoom is a fully runnable, buildable, and demonstrable v1 MVP.
@@ -97,6 +97,10 @@ Web 端工作台。使用 `React 19`、`Vite`、`React Three Fiber`、`Three.js`
 
 官方内容生成器。它负责构建三套官方 trace，并把样例输出到 `apps/studio/public/traces/`。
 
+### `tools/model-training`
+
+ONNX 模型训练脚本。训练微型 MLP、CNN、Transformer 模型，导出 ONNX 文件到 `apps/studio/public/models/`，供浏览器端推理使用。
+
 ## 技术路线
 
 NeuroLoom 当前的主渲染基线是 `WebGL + EffectComposer`。这条路线是为了保证 2.5D 场景、发光、景深、色带和后处理链的稳定性，而不是为了追求实验性 API。
@@ -153,6 +157,8 @@ Studio 当前支持以下快捷操作：
 - `Space`：播放 / 暂停
 - `← / →`：逐帧步进
 - `S`：导出当前帧 PNG
+- `F`：冻结 / 解冻当前焦点
+- `Esc`：解除冻结或取消选中
 
 用户既可以从内置官方样例开始，也可以直接导入本地 `.loomtrace` 文件。
 

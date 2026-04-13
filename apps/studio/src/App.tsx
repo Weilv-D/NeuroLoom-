@@ -8,6 +8,7 @@ const PLAYBACK_INTERVAL_MS = 520;
 import { officialTraces } from "./sampleTraces";
 import { type SelectionState, useStudioStore } from "./state";
 import { loadTraceFromFile, loadTraceFromUrl } from "./traceLoader";
+import { runOnnxInference } from "./onnxInference";
 
 type BrowserRuntimeState = {
   label: string;
@@ -41,6 +42,8 @@ export function App() {
     toggleFreezeSelection,
     clearFrozenSelection,
     jumpToChapter,
+    regenerationProgress,
+    setRegenerationProgress,
   } = useStudioStore();
   const uploadId = useId();
   const stageFrameRef = useRef<HTMLDivElement | null>(null);
@@ -59,17 +62,16 @@ export function App() {
   }
 
   async function regenerateOfficialTrace(targetTraceId: string) {
-    beginLoading(`${targetTraceId} (browser)`);
+    beginLoading(`${targetTraceId} (ONNX)`);
     try {
-      const { createOfficialTraceBundle, isOfficialTraceId } = await import("@neuroloom/official-traces");
-      if (!isOfficialTraceId(targetTraceId)) {
-        throw new Error(`Browser regeneration is only available for official traces. Received "${targetTraceId}".`);
-      }
-      const nextBundle = createOfficialTraceBundle(targetTraceId);
+      const nextBundle = await runOnnxInference(targetTraceId, (progress) => {
+        setRegenerationProgress(progress);
+      });
       startTransition(() => {
         finishLoading(targetTraceId, nextBundle);
       });
     } catch (loadError) {
+      setRegenerationProgress(null);
       failLoading((loadError as Error).message);
     }
   }
@@ -310,6 +312,11 @@ export function App() {
       </section>
 
       {loadingLabel ? <div className="banner banner--info">Loading {loadingLabel}…</div> : null}
+      {regenerationProgress ? (
+        <div className="banner banner--progress">
+          Rebuilding {regenerationProgress.phase} — Frame {regenerationProgress.frame}/{regenerationProgress.total}
+        </div>
+      ) : null}
       {error ? <div className="banner banner--error">{error}</div> : null}
 
       {bundle && deferredFrame ? (
@@ -409,7 +416,7 @@ export function App() {
           </aside>
 
           <section className="stage-column">
-            <div className="stage-frame" ref={stageFrameRef}>
+            <div className={`stage-frame${frozenSelection ? " is-frozen" : ""}`} ref={stageFrameRef}>
               <div className="stage-frame__overlay">
                 <div>
                   <span className="overlay-label">Phase</span>
@@ -442,7 +449,7 @@ export function App() {
                 <LegendPill colorClass="is-amber" label="Compression / backward pressure" />
                 <LegendPill colorClass="is-lime" label="Selection / frozen focus" />
               </div>
-              <SceneCanvas bundle={bundle} frame={deferredFrame} selection={sceneSelection} onSelect={setSelection} />
+              <SceneCanvas bundle={bundle} frame={deferredFrame} selection={sceneSelection} isFrozen={!!frozenSelection} onSelect={setSelection} />
             </div>
             <TimelineBar
               frame={deferredFrame}
@@ -479,7 +486,7 @@ export function App() {
               <InspectorPanel
                 bundle={bundle}
                 frame={deferredFrame}
-                selection={selection}
+                selection={sceneSelection}
                 chapter={currentChapter?.description ?? null}
                 activeTrace={activeTrace ?? null}
                 onSelect={setSelection}

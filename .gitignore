@@ -4,3 +4,6 @@ coverage
 .DS_Store
 *.loomtrace
 test-results/
+# Training intermediates — the .onnx files themselves are committed
+apps/studio/public/models/*.npz
+apps/studio/public/models/*.onnx.data

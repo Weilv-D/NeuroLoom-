@@ -7,6 +7,12 @@ export type SelectionState = {
   kind: "node" | "edge";
 } | null;
 
+export type RegenerationProgress = {
+  frame: number;
+  total: number;
+  phase: string;
+} | null;
+
 type StudioState = {
   mode: AppMode;
   traceId: string | null;
@@ -19,6 +25,7 @@ type StudioState = {
   selection: SelectionState;
   frozenSelection: SelectionState;
   activeChapterId: string | null;
+  regenerationProgress: RegenerationProgress;
   setMode(mode: AppMode): void;
   beginLoading(label: string): void;
   finishLoading(traceId: string, bundle: TraceBundle): void;
@@ -31,6 +38,7 @@ type StudioState = {
   toggleFreezeSelection(selection?: SelectionState): void;
   clearFrozenSelection(): void;
   jumpToChapter(chapterId: string): void;
+  setRegenerationProgress(progress: RegenerationProgress): void;
 };
 
 export const useStudioStore = create<StudioState>((set, get) => ({
@@ -45,6 +53,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   selection: null,
   frozenSelection: null,
   activeChapterId: null,
+  regenerationProgress: null,
   setMode(mode) {
     set({ mode });
   },
@@ -64,11 +73,12 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       playing: false,
       activeChapterId: firstChapter?.id ?? null,
       frozenSelection: null,
+      regenerationProgress: null,
       selection: firstChapter?.defaultSelection ? { id: firstChapter.defaultSelection, kind: "node" } : null,
     });
   },
   failLoading(message) {
-    set({ error: message, loadingLabel: null, playing: false });
+    set({ error: message, loadingLabel: null, playing: false, regenerationProgress: null });
   },
   setFrameIndex(index) {
     const engine = get().engine;
@@ -109,6 +119,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   },
   clearFrozenSelection() {
     set({ frozenSelection: null });
+  },
+  setRegenerationProgress(progress) {
+    set({ regenerationProgress: progress });
   },
   jumpToChapter(chapterId) {
     const bundle = get().bundle;

@@ -3,6 +3,10 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  assetsInclude: ["**/*.onnx"],
+  optimizeDeps: {
+    exclude: ["onnxruntime-web"],
+  },
   build: {
     chunkSizeWarningLimit: 1200,
     rollupOptions: {
@@ -19,6 +23,9 @@ export default defineConfig({
           }
           if (id.includes("d3-scale")) {
             return "d3";
+          }
+          if (id.includes("onnxruntime-web")) {
+            return "onnx";
           }
           return undefined;
         },

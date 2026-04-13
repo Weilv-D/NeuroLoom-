@@ -16,13 +16,13 @@ NeuroLoom 是一个面向 `MLP`、`CNN` 和标准 `GPT` 架构大模型 (`Transf
 - 整套场景深度集成电影级后期色彩管线（包括 `Cinematic Bloom`，`Chromatic Aberration` 镜头边缘色差以及沉浸式动态深空颗粒背景）。
 - 完成了 `Replay-first`（回放第一）的核心工作流。囊括三个主要神经架构范式（`mlp`，`cnn`，`transformer`）以及它们的独立视觉案例探索模式。
 - 系统内部置双环境架构设计：`Story Mode` (故事演示模式) 与 `Studio Mode`（探索解构模式）。
+- **ONNX Runtime Web + WebGPU 浏览器端推理**——真实微型 ONNX 模型（MLP、CNN、Transformer）在浏览器内执行前向传播，激活值、特征图与注意力权重均来自真实计算而非合成数据。WebGPU 不可用时自动回退至 WASM。
+- **隔离冻结工作流**——选中节点或边后按 `F` 键冻结，相机与检查器锁定至该元素，所有非相关节点与边近乎消失。按 `Esc` 解冻。
 - 用 `Playwright` 搭起了端到端自动化 UI 与视觉回归基线（并引入带有语义确定性的 `data-testid` 机制）。
 - 基于 TypeScript 的类型完整校验方案、ESLint 和 Prettier 代码风格加固。
 - 成熟可靠的回放加载机制、Payload 安全反序列解析等架构引擎支持。
 
 **尚未完全实装部分：**
-- 利用 `ONNX Runtime Web + WebGPU` 面向标准浏览器内自动直接进行官方样板回放构建（作为一种后验补充功能路线）。
-- 专属针对个别数据图层的独立“冻结(Freeze)”隔离工作流。
 - 第三方公开查阅使用的统一站点及组件发布文档支持。
 
 ## 为什么是神经回放？
