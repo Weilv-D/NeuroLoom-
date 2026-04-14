@@ -8,6 +8,8 @@ NeuroLoom is a live-first visual stage for `Qwen/Qwen3.5-0.8B`.
   Product definition, repo layout, local setup, runner, and scope boundary.
 - [`.loomtrace` profile](./loomtrace-spec.md)
   The replay bundle format used for exported Qwen sessions and the built-in sample replay.
+- [Backend profiles](./backends.md)
+  How to attach NeuroLoom Runner to LM Studio, Ollama, vLLM, or another OpenAI-compatible local backend.
 
 ## Product Surface
 
@@ -42,6 +44,7 @@ pnpm validate:samples
   Emits the official fallback `.loomtrace`.
 - `tools/runner`
   Local API and WebSocket server for live sessions.
+  Example `.env` presets live in `tools/runner/examples/`.
 
 The runner supports two live sources:
 

@@ -24,8 +24,7 @@ import { loadTraceFromFile, loadTraceFromUrl } from "./traceLoader";
 import type { SelectionState } from "./types";
 
 const playbackIntervalMs = 160;
-const defaultPrompt =
-  "Explain how NeuroLoom should make a Qwen3.5-0.8B conversation feel like light moving through a dense starfield.";
+const defaultPrompt = "Explain how NeuroLoom should make a Qwen3.5-0.8B conversation feel like light moving through a dense starfield.";
 
 type SessionMode = "sample" | "connecting" | "live" | "replay";
 
@@ -162,7 +161,7 @@ export function App() {
   const engine = useMemo(() => (bundle && bundle.timeline.length > 0 ? new ReplayEngine(bundle) : null), [bundle]);
   const safeFrameIndex = bundle ? clamp(frameIndex, 0, Math.max(bundle.timeline.length - 1, 0)) : 0;
   const frame = engine ? engine.getFrame(safeFrameIndex) : null;
-  const currentChapter = frame && engine ? engine.getChapterForFrame(safeFrameIndex) : bundle?.narrative.chapters[0] ?? null;
+  const currentChapter = frame && engine ? engine.getChapterForFrame(safeFrameIndex) : (bundle?.narrative.chapters[0] ?? null);
   const currentPayload = bundle && frame ? getInspectPayload(bundle, frame) : null;
   const currentMetrics = frame?.metric_refs ?? [];
   const currentTokenIndex = currentPayload?.tokenIndex ?? null;
@@ -172,7 +171,7 @@ export function App() {
   const focusDigest = currentPayload ? currentPayload.blockDigest.slice(Math.max(0, focusBlock - 2), Math.min(24, focusBlock + 3)) : [];
   const selectionDetail = describeSelection({ bundle, frame, payload: currentPayload, selection });
   const chapterIndex = currentChapter && bundle ? bundle.narrative.chapters.findIndex((chapter) => chapter.id === currentChapter.id) : -1;
-  const currentRunnerSession = sessionId ? runnerSessions.find((entry) => entry.id === sessionId) ?? null : null;
+  const currentRunnerSession = sessionId ? (runnerSessions.find((entry) => entry.id === sessionId) ?? null) : null;
 
   function stepFrame(delta: number) {
     if (!bundle || bundle.timeline.length === 0) return;
@@ -254,7 +253,9 @@ export function App() {
           setSessionMode("replay");
           setLoadingLabel(null);
           setStatusLine(`Live session completed in ${(event.durationMs / 1000).toFixed(1)}s. Replay is ready.`);
-          void listRunnerSessions().then(setRunnerSessions).catch(() => undefined);
+          void listRunnerSessions()
+            .then(setRunnerSessions)
+            .catch(() => undefined);
         },
         onError(message) {
           setLoadingLabel(null);
@@ -338,7 +339,10 @@ export function App() {
     try {
       if (traceUrl && sessionMode !== "sample") {
         const archive = await downloadTraceFromRunner(traceUrl);
-        triggerDownload(URL.createObjectURL(new Blob([archive], { type: "application/octet-stream" })), `${sessionId ?? "qwen-session"}.loomtrace`);
+        triggerDownload(
+          URL.createObjectURL(new Blob([archive], { type: "application/octet-stream" })),
+          `${sessionId ?? "qwen-session"}.loomtrace`,
+        );
         return;
       }
       if (!bundle) {
@@ -346,7 +350,10 @@ export function App() {
         return;
       }
       const archive = await createLoomTraceArchive(bundle);
-      triggerDownload(URL.createObjectURL(new Blob([archive], { type: "application/octet-stream" })), `${bundle.manifest.model_id}.loomtrace`);
+      triggerDownload(
+        URL.createObjectURL(new Blob([archive], { type: "application/octet-stream" })),
+        `${bundle.manifest.model_id}.loomtrace`,
+      );
     } catch (exportError) {
       setError((exportError as Error).message);
     }
@@ -395,8 +402,8 @@ export function App() {
           <p className="eyebrow">NeuroLoom</p>
           <h1>Qwen3.5-0.8B, rendered as a live starfield.</h1>
           <p className="hero-text">
-            A single-model stage for Qwen conversations. Live sessions stream into a dense field of residual light, grouped
-            attention, DeltaNet memory, and replayable decode traces.
+            A single-model stage for Qwen conversations. Live sessions stream into a dense field of residual light, grouped attention,
+            DeltaNet memory, and replayable decode traces.
           </p>
         </div>
         <div className="header-badges">
@@ -477,8 +484,20 @@ export function App() {
                 <strong>{runnerHealth?.backendModel ?? "fallback replay only"}</strong>
               </div>
               <div>
+                <span>Provider</span>
+                <strong>
+                  {runnerHealth
+                    ? `${runnerHealth.backendLabel}${runnerHealth.backendDetectedFrom === "override" ? " · forced" : ""}`
+                    : "synthetic"}
+                </strong>
+              </div>
+              <div>
                 <span>Target</span>
                 <strong>{runnerHealth?.backendUrl ?? "local synthetic runner"}</strong>
+              </div>
+              <div>
+                <span>Endpoint</span>
+                <strong>{runnerHealth?.backendEndpoint ?? "not in use"}</strong>
               </div>
               <div>
                 <span>Status</span>
@@ -489,6 +508,7 @@ export function App() {
                 <strong>{currentRunnerSession?.status ?? sessionMode}</strong>
               </div>
             </div>
+            {runnerHealth?.backendSetupHint ? <p className="helper-copy">{runnerHealth.backendSetupHint}</p> : null}
             {error ? <p className="error-text">{error}</p> : null}
             {loadingLabel ? <p className="loading-text">{loadingLabel}</p> : null}
           </section>
@@ -587,7 +607,14 @@ export function App() {
             </div>
 
             {bundle ? (
-              <SceneCanvas bundle={bundle} frame={frame} payload={currentPayload} selection={selection} onSelect={setSelection} live={sessionMode === "live"} />
+              <SceneCanvas
+                bundle={bundle}
+                frame={frame}
+                payload={currentPayload}
+                selection={selection}
+                onSelect={setSelection}
+                live={sessionMode === "live"}
+              />
             ) : (
               <div className="stage-placeholder">Preparing the starfield…</div>
             )}
@@ -595,7 +622,12 @@ export function App() {
 
           <section className="scrubber-card">
             <div className="scrubber-actions">
-              <button type="button" className="secondary-button" onClick={() => stepFrame(-1)} disabled={!bundle || bundle.timeline.length === 0}>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => stepFrame(-1)}
+                disabled={!bundle || bundle.timeline.length === 0}
+              >
                 Prev
               </button>
               <button
@@ -606,10 +638,19 @@ export function App() {
               >
                 {playing ? "Pause" : "Play"}
               </button>
-              <button type="button" className="secondary-button" onClick={() => stepFrame(1)} disabled={!bundle || bundle.timeline.length === 0}>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => stepFrame(1)}
+                disabled={!bundle || bundle.timeline.length === 0}
+              >
                 Next
               </button>
-              <button type="button" className={liveFollow ? "secondary-button is-active" : "secondary-button"} onClick={() => setLiveFollow((current) => !current)}>
+              <button
+                type="button"
+                className={liveFollow ? "secondary-button is-active" : "secondary-button"}
+                onClick={() => setLiveFollow((current) => !current)}
+              >
                 Follow Live
               </button>
               <button type="button" className="secondary-button" onClick={() => void exportPng()}>
@@ -654,7 +695,12 @@ export function App() {
                 <strong>{frame?.phase ?? "idle"}</strong>
               </div>
               <div className="chapter-actions">
-                <button type="button" className="secondary-button" onClick={() => jumpToChapter(-1)} disabled={!bundle || chapterIndex <= 0}>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => jumpToChapter(-1)}
+                  disabled={!bundle || chapterIndex <= 0}
+                >
                   Prev Chapter
                 </button>
                 <button
@@ -761,7 +807,9 @@ function DigestBar({ label, value }: { label: string; value: number }) {
 }
 
 function getInspectPayload(bundle: TraceBundle, frame: TraceFrame) {
-  const payloadId = frame.payload_refs.find((ref) => bundle.manifest.payload_catalog.find((entry) => entry.id === ref && entry.kind === "inspect"));
+  const payloadId = frame.payload_refs.find((ref) =>
+    bundle.manifest.payload_catalog.find((entry) => entry.id === ref && entry.kind === "inspect"),
+  );
   if (!payloadId) return null;
   const raw = bundle.payloads.get(payloadId);
   if (!raw) return null;
@@ -797,7 +845,7 @@ function describeSelection(input: {
     const payload = input.payload;
     const localIndex = payload ? payload.tokenWindow.length - (payload.tokenIndex - index + 1) : -1;
     const token = payload && localIndex >= 0 ? payload.tokenWindow[localIndex] : input.selection.id;
-    const attention = payload && localIndex >= 0 ? payload.attentionRow[localIndex] ?? 0 : 0;
+    const attention = payload && localIndex >= 0 ? (payload.attentionRow[localIndex] ?? 0) : 0;
     return {
       title: `Token ${index + 1}`,
       description: "A token focus brightens the local rail and pulls attention weights toward its recent neighborhood.",
@@ -812,7 +860,8 @@ function describeSelection(input: {
     const unit = input.payload?.sampledUnits.find((entry) => entry.id === input.selection.id);
     return {
       title: unit?.label ?? input.selection.id,
-      description: "Sample clusters are the visible star grains inside each hybrid sub-block. They move with the same token pulse as their parent lane.",
+      description:
+        "Sample clusters are the visible star grains inside each hybrid sub-block. They move with the same token pulse as their parent lane.",
       metrics: unit
         ? [
             { label: "lane", value: unit.lane },

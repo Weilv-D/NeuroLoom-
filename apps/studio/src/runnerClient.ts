@@ -10,6 +10,11 @@ export type RunnerHealth = {
   backendModel: string;
   streaming: boolean;
   backendUrl: string | null;
+  backendEndpoint: string | null;
+  backendProvider: "synthetic" | "lmstudio" | "ollama" | "vllm" | "custom";
+  backendLabel: string;
+  backendDetectedFrom: "synthetic" | "override" | "url";
+  backendSetupHint: string;
   sessions: number;
   liveEndpoint: string;
 };

@@ -94,6 +94,23 @@ Environment variables:
 - `NEUROLOOM_BACKEND_API_KEY`
 - `NEUROLOOM_BACKEND_MODEL`
 - `NEUROLOOM_BACKEND_STREAM`
+- `NEUROLOOM_BACKEND_PROVIDER`
+- `NEUROLOOM_SESSION_RETENTION`
+
+## Backend Profiles
+
+NeuroLoom now recognizes common local Qwen backends and surfaces the detected provider in the UI and `/health`.
+
+- `LM Studio`
+  Use [tools/runner/examples/lmstudio.env.example](./tools/runner/examples/lmstudio.env.example)
+- `Ollama`
+  Use [tools/runner/examples/ollama.env.example](./tools/runner/examples/ollama.env.example)
+- `vLLM`
+  Use [tools/runner/examples/vllm.env.example](./tools/runner/examples/vllm.env.example)
+- `custom`
+  Set `NEUROLOOM_BACKEND_URL` to any OpenAI-compatible chat endpoint. Use `NEUROLOOM_BACKEND_PROVIDER=custom` if the URL is ambiguous.
+
+See [docs/backends.md](./docs/backends.md) for setup notes and launch examples.
 
 ## `.loomtrace`
 

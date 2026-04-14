@@ -202,7 +202,10 @@ code {
   border: 1px solid rgba(102, 130, 193, 0.2);
   background: rgba(11, 17, 31, 0.85);
   color: var(--text);
-  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease;
 }
 
 .primary-button {
@@ -264,6 +267,13 @@ input[type="file"] {
 .error-text {
   margin-top: 14px;
   font-size: 0.94rem;
+}
+
+.helper-copy {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 0.94rem;
+  line-height: 1.6;
 }
 
 .error-text {
@@ -477,11 +487,15 @@ input[type="file"] {
 }
 
 .star-node.focus-selected .star-core {
-  box-shadow: 0 0 0 1px rgba(215, 255, 99, 0.25), 0 0 28px rgba(215, 255, 99, 0.28);
+  box-shadow:
+    0 0 0 1px rgba(215, 255, 99, 0.25),
+    0 0 28px rgba(215, 255, 99, 0.28);
 }
 
 .star-node.focus-related .star-core {
-  box-shadow: 0 0 0 1px rgba(47, 229, 255, 0.18), 0 0 22px rgba(47, 229, 255, 0.18);
+  box-shadow:
+    0 0 0 1px rgba(47, 229, 255, 0.18),
+    0 0 22px rgba(47, 229, 255, 0.18);
 }
 
 .star-label {

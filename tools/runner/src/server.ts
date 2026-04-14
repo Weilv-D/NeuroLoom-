@@ -11,6 +11,8 @@ import {
 } from "@neuroloom/official-traces";
 import { WebSocket, WebSocketServer } from "ws";
 
+import { detectBackendProfile, resolveBackendEndpoint } from "./backendProfiles.js";
+
 type RunnerMode = "synthetic" | "adapter";
 
 type ChatCompletionRequest = {
@@ -41,8 +43,10 @@ const backendUrl = process.env.NEUROLOOM_BACKEND_URL?.trim() ?? "";
 const backendApiKey = process.env.NEUROLOOM_BACKEND_API_KEY?.trim() ?? process.env.OPENAI_API_KEY?.trim() ?? "";
 const backendModel = process.env.NEUROLOOM_BACKEND_MODEL?.trim() ?? qwenRunnerModelId;
 const backendStreamingRequested = process.env.NEUROLOOM_BACKEND_STREAM?.trim() !== "false";
+const backendProvider = process.env.NEUROLOOM_BACKEND_PROVIDER?.trim() ?? "";
 const mode: RunnerMode = backendUrl ? "adapter" : "synthetic";
 const sessionRetention = Number(process.env.NEUROLOOM_SESSION_RETENTION ?? "12");
+const backendProfile = detectBackendProfile(backendUrl, backendProvider);
 
 const sessions = new Map<string, SessionRecord>();
 
@@ -94,7 +98,7 @@ wss.on("connection", (socket: WebSocket, _request: IncomingMessage, sessionId: s
 server.listen(runnerPort, "127.0.0.1", () => {
   console.log(`NeuroLoom Runner listening on http://127.0.0.1:${runnerPort} (${mode})`);
   if (mode === "adapter") {
-    console.log(`Adapter target: ${backendUrl}`);
+    console.log(`Adapter target: ${backendProfile.label} -> ${backendProfile.endpoint}`);
   }
 });
 
@@ -116,6 +120,11 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse) 
       backendModel: backendModel,
       streaming: Boolean(backendUrl) && backendStreamingRequested,
       backendUrl: backendUrl || null,
+      backendEndpoint: backendProfile.endpoint,
+      backendProvider: backendProfile.provider,
+      backendLabel: backendProfile.label,
+      backendDetectedFrom: backendProfile.detectedFrom,
+      backendSetupHint: backendProfile.setupHint,
       sessions: sessions.size,
       liveEndpoint: `/live/:sessionId`,
     });
@@ -179,9 +188,7 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse) 
 
   if (request.method === "GET" && url.pathname === "/sessions") {
     sendJson(response, 200, {
-      sessions: [...sessions.values()]
-        .sort((left, right) => right.createdAt - left.createdAt)
-        .map((session) => serializeSession(session)),
+      sessions: [...sessions.values()].sort((left, right) => right.createdAt - left.createdAt).map((session) => serializeSession(session)),
     });
     return;
   }
@@ -308,7 +315,7 @@ async function finishSession(session: SessionRecord) {
 }
 
 async function streamBackendCompletion(session: SessionRecord, request: ChatCompletionRequest) {
-  const response = await fetch(resolveBackendEndpoint(), {
+  const response = await fetch(resolveBackendEndpoint(backendUrl), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -384,7 +391,7 @@ async function streamBackendCompletion(session: SessionRecord, request: ChatComp
 }
 
 async function resolveBufferedCompletionText(_prompt: string, request: ChatCompletionRequest) {
-  const endpoint = resolveBackendEndpoint();
+  const endpoint = resolveBackendEndpoint(backendUrl);
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -428,10 +435,6 @@ function broadcastEvent(session: SessionRecord, event: QwenLiveEvent) {
       socket.send(payload);
     }
   }
-}
-
-function resolveBackendEndpoint() {
-  return backendUrl.endsWith("/chat/completions") ? backendUrl : `${backendUrl.replace(/\/$/, "")}/v1/chat/completions`;
 }
 
 async function extractBufferedCompletionFromResponse(response: Response) {
@@ -482,9 +485,7 @@ function extractContentString(content: string | Array<{ text?: string; type?: st
     return content;
   }
   if (Array.isArray(content)) {
-    return content
-      .map((part) => part.text ?? "")
-      .join("");
+    return content.map((part) => part.text ?? "").join("");
   }
   return "";
 }
