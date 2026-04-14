@@ -20,6 +20,73 @@ type SceneCanvasProps = {
 
 type FocusState = "selected" | "related" | "muted" | "neutral";
 
+// ---------- vertex / fragment shaders for neuron point cloud ----------
+
+const neuronVertexShader = /* glsl */ `
+  attribute float aSize;
+  attribute float aActivation;
+  attribute float aIsAttn;
+  attribute float aSelected;
+
+  varying float vActivation;
+  varying float vIsAttn;
+  varying float vSelected;
+
+  void main() {
+    vActivation = aActivation;
+    vIsAttn = aIsAttn;
+    vSelected = aSelected;
+
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    gl_PointSize = aSize * (220.0 / -mvPosition.z);
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`;
+
+const neuronFragmentShader = /* glsl */ `
+  varying float vActivation;
+  varying float vIsAttn;
+  varying float vSelected;
+
+  void main() {
+    // Circular soft particle
+    vec2 center = gl_PointCoord - vec2(0.5);
+    float dist = length(center);
+    if (dist > 0.5) discard;
+
+    float glow = 1.0 - smoothstep(0.0, 0.5, dist);
+
+    float act = abs(vActivation);
+    float intensity = act * glow;
+
+    // Color mapping: star-galaxy palette
+    vec3 darkBlue = vec3(0.04, 0.08, 0.13);      // inactive
+    vec3 coldBlue = vec3(0.24, 0.91, 1.0);        // low activation
+    vec3 white = vec3(0.93, 0.97, 1.0);           // mid activation
+    vec3 warmGold = vec3(1.0, 0.98, 0.88);        // high activation
+    vec3 amber = vec3(1.0, 0.72, 0.37);           // attention heads
+    vec3 selectedGreen = vec3(0.84, 1.0, 0.39);   // selected
+
+    vec3 color;
+    if (vSelected > 0.5) {
+      color = mix(selectedGreen, vec3(1.0), act * 0.4);
+    } else if (vIsAttn > 0.5) {
+      color = mix(darkBlue, amber, act);
+    } else if (act < 0.15) {
+      color = mix(darkBlue, coldBlue * 0.3, act / 0.15);
+    } else if (act < 0.5) {
+      color = mix(coldBlue, white, (act - 0.15) / 0.35);
+    } else {
+      color = mix(white, warmGold, (act - 0.5) / 0.5);
+    }
+
+    float alpha = mix(0.04, 0.92, act) * glow;
+    if (vSelected > 0.5) alpha = max(alpha, 0.7);
+
+    gl_FragColor = vec4(color * (0.3 + intensity * 1.4), alpha);
+  }
+`;
+
 export function SceneCanvas({ bundle, frame, payload, selection, onSelect, live }: SceneCanvasProps) {
   const cameraPreset =
     bundle.manifest.camera_presets.find((entry) => entry.id === frame?.camera_anchor) ?? bundle.manifest.camera_presets[0]!;
@@ -115,11 +182,28 @@ function SceneRoot({
     .filter((node) => node.metadata.lane === "residual")
     .map((node) => [node.position.x, node.position.y, node.position.z] as [number, number, number]);
 
+  // Build simplified block-level flow edges
+  const flowEdges = useMemo(() => {
+    const result: { id: string; from: [number, number, number]; to: [number, number, number]; intensity: number }[] = [];
+    const residualNodes = bundle.graph.nodes.filter((n) => n.metadata.lane === "residual");
+    for (let i = 0; i < residualNodes.length - 1; i++) {
+      const from = residualNodes[i]!;
+      const to = residualNodes[i + 1]!;
+      result.push({
+        id: `flow-${i}`,
+        from: [from.position.x, from.position.y, from.position.z],
+        to: [to.position.x, to.position.y, to.position.z],
+        intensity: 0.4,
+      });
+    }
+    return result;
+  }, [bundle.graph.nodes]);
+
   return (
     <>
       <CameraRig cameraPreset={cameraPreset} focusPosition={focusPosition} live={live} />
       <color attach="background" args={["#04070d"]} />
-      <fog attach="fog" args={["#04070d", 12, 42]} />
+      <fog attach="fog" args={["#04070d", 14, 48]} />
       <ambientLight intensity={0.7} color="#cfe5ff" />
       <pointLight position={[-10, 6, 12]} intensity={2.4} color="#2fe5ff" />
       <pointLight position={[16, -6, 9]} intensity={1.8} color="#ffb85f" />
@@ -129,46 +213,62 @@ function SceneRoot({
       <NebulaField />
       <ResidualRiver points={residualPoints} live={live} />
 
-      {bundle.graph.edges.map((edge) => {
-        const source = nodeMap.get(edge.source);
-        const target = nodeMap.get(edge.target);
-        const state = edgeStateMap.get(edge.id);
-        if (!source || !target || !state) return null;
-        return (
-          <EdgeStream
-            key={edge.id}
-            edgeId={edge.id}
-            from={vectorToTuple(source.position)}
-            to={vectorToTuple(target.position)}
-            intensity={state.intensity}
-            direction={state.direction}
-            focus={focusForEdge(edge.id, selection, connectedEdgeIds)}
-            live={live}
-          />
-        );
-      })}
+      <NeuronField
+        graph={bundle.graph}
+        frame={frame}
+        selection={selection}
+        onSelect={onSelect}
+        live={live}
+      />
 
-      {bundle.graph.nodes.map((node) => {
-        const nodeState = nodeStateMap.get(node.id);
-        const lane = String(node.metadata.lane ?? node.type);
+      {/* Simplified block-level flow edges */}
+      {flowEdges.map((fe) => (
+        <FlowLine key={fe.id} from={fe.from} to={fe.to} live={live} />
+      ))}
+
+      {/* Retain attention/delta/ffn branch edges for structural context */}
+      {bundle.graph.edges
+        .filter((edge) => edge.type.includes("branch") || edge.type === "decode-flow" || edge.type === "token-flow")
+        .map((edge) => {
+          const source = nodeMap.get(edge.source);
+          const target = nodeMap.get(edge.target);
+          const state = edgeStateMap.get(edge.id);
+          if (!source || !target || !state) return null;
+          return (
+            <EdgeStream
+              key={edge.id}
+              edgeId={edge.id}
+              from={vectorToTuple(source.position)}
+              to={vectorToTuple(target.position)}
+              intensity={state.intensity}
+              direction={state.direction}
+              focus={focusForEdge(edge.id, selection, connectedEdgeIds)}
+              live={live}
+            />
+          );
+        })}
+
+      {/* Structural anchor nodes (residual, prompt, decode, logits) */}
+      {bundle.graph.nodes.map((graphNode) => {
+        const nodeState = nodeStateMap.get(graphNode.id);
+        const lane = String(graphNode.metadata.lane ?? graphNode.type);
+        if (lane !== "residual" && lane !== "prompt" && lane !== "embedding" && graphNode.type !== "logits" && graphNode.type !== "decode") return null;
         return (
-          <NodeCluster
-            key={node.id}
-            nodeId={node.id}
-            label={node.label}
-            lane={lane}
-            type={node.type}
-            position={vectorToTuple(node.position)}
+          <NodeAnchor
+            key={graphNode.id}
+            nodeId={graphNode.id}
+            label={graphNode.label}
+            type={graphNode.type}
+            position={vectorToTuple(graphNode.position)}
             intensity={Math.abs(nodeState?.activation ?? 0.12)}
             emphasis={nodeState?.emphasis ?? 0.25}
-            focus={focusForNode(node.id, selection, connectedNodeIds)}
-            onSelect={() => onSelect({ kind: "node", id: node.id })}
-            showLabel={selection?.kind === "node" && selection.id === node.id}
+            focus={focusForNode(graphNode.id, selection, connectedNodeIds)}
+            onSelect={() => onSelect({ kind: "node", id: graphNode.id })}
+            showLabel={selection?.kind === "node" && selection.id === graphNode.id}
           />
         );
       })}
 
-      {payload ? <SampleClusterLayer payload={payload} nodeMap={nodeMap} selection={selection} onSelect={onSelect} /> : null}
       {payload ? <TokenRail payload={payload} selection={selection} onSelect={onSelect} /> : null}
       {payload ? <LogitWaterfall payload={payload} /> : null}
       {focusPosition ? <SelectionHalo position={vectorToTuple(focusPosition)} /> : null}
@@ -181,6 +281,186 @@ function SceneRoot({
     </>
   );
 }
+
+// ---------- NeuronField: GPU point cloud for all neurons ----------
+
+function NeuronField({
+  graph,
+  frame,
+  selection,
+  onSelect,
+  live,
+}: {
+  graph: TraceBundle["graph"];
+  frame: TraceFrame | null;
+  selection: SelectionState;
+  onSelect(selection: SelectionState): void;
+  live: boolean;
+}) {
+  const pointsRef = useRef<THREE.Points>(null);
+
+  // Build geometry once when graph changes
+  const { geometry, neuronIds } = useMemo(() => {
+    const neurons = graph.neurons ?? [];
+    const positions = graph.neuronPositions ?? {};
+    const count = neurons.length;
+
+    const posArr = new Float32Array(count * 3);
+    const ids: string[] = [];
+    const attnArr = new Float32Array(count);
+
+    for (let i = 0; i < count; i++) {
+      const neuron = neurons[i]!;
+      ids.push(neuron.id);
+      const pos = positions[neuron.id] ?? [0, 0, 0];
+      posArr[i * 3] = pos[0];
+      posArr[i * 3 + 1] = pos[1];
+      posArr[i * 3 + 2] = pos[2];
+      attnArr[i] = neuron.lane === "attn_head" ? 1.0 : 0.0;
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(posArr, 3));
+    geo.setAttribute("aSize", new THREE.BufferAttribute(new Float32Array(count), 1));
+    geo.setAttribute("aActivation", new THREE.BufferAttribute(new Float32Array(count), 1));
+    geo.setAttribute("aIsAttn", new THREE.BufferAttribute(attnArr, 1));
+    geo.setAttribute("aSelected", new THREE.BufferAttribute(new Float32Array(count), 1));
+
+    return { geometry: geo, neuronIds: ids };
+  }, [graph]);
+
+  // Build neuron state lookup
+  const neuronStateMap = useMemo(() => {
+    const map = new Map<string, number>();
+    if (frame?.neuron_states) {
+      for (const ns of frame.neuron_states) {
+        map.set(ns.id, ns.activation);
+      }
+    }
+    return map;
+  }, [frame?.neuron_states]);
+
+  // Update selection buffer only when selection changes
+  const selectedId = selection?.kind === "neuron" ? selection.id : null;
+  useMemo(() => {
+    const count = neuronIds.length;
+    const selAttr = geometry.getAttribute("aSelected") as THREE.BufferAttribute;
+    for (let i = 0; i < count; i++) {
+      selAttr.setX(i, neuronIds[i] === selectedId ? 1.0 : 0.0);
+    }
+    selAttr.needsUpdate = true;
+  }, [geometry, neuronIds, selectedId]);
+
+  // Per-frame update of size and activation buffers (dynamic)
+  useFrame((state) => {
+    const count = neuronIds.length;
+    const sizeAttr = geometry.getAttribute("aSize") as THREE.BufferAttribute;
+    const actAttr = geometry.getAttribute("aActivation") as THREE.BufferAttribute;
+
+    const time = state.clock.elapsedTime;
+
+    for (let i = 0; i < count; i++) {
+      const id = neuronIds[i]!;
+      let activation = neuronStateMap.get(id) ?? 0;
+
+      // Pulse effect: add time-based shimmer for active neurons
+      const act = Math.abs(activation);
+      if (act > 0.1) {
+        const shimmer = Math.sin(time * 3.0 + i * 0.007) * 0.06 * act;
+        activation = activation + shimmer;
+      }
+
+      const absAct = Math.abs(activation);
+      const baseSize = 0.006;
+      const size = baseSize + absAct * absAct * 0.03;
+
+      sizeAttr.setX(i, size);
+      actAttr.setX(i, activation);
+    }
+
+    sizeAttr.needsUpdate = true;
+    actAttr.needsUpdate = true;
+  });
+
+  const material = useMemo(
+    () =>
+      new THREE.ShaderMaterial({
+        vertexShader: neuronVertexShader,
+        fragmentShader: neuronFragmentShader,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    [],
+  );
+
+  return (
+    <points
+      ref={pointsRef}
+      geometry={geometry}
+      material={material}
+      onClick={(event) => {
+        event.stopPropagation();
+
+        // R3F raycasts Points objects and stores the hit index on event.index
+        const idx = (event as unknown as { index?: number }).index;
+        if (idx !== undefined && idx >= 0 && idx < neuronIds.length) {
+          onSelect({ kind: "neuron", id: neuronIds[idx]! });
+        }
+      }}
+      onPointerMissed={() => {
+        // Don't clear selection on miss — keep the current selection
+      }}
+    />
+  );
+}
+
+// ---------- FlowLine: simplified block-to-block flow ----------
+
+function FlowLine({
+  from,
+  to,
+  live,
+}: {
+  from: [number, number, number];
+  to: [number, number, number];
+  live: boolean;
+}) {
+  const pulseRef = useRef<THREE.Mesh>(null);
+  const hash = useMemo(() => from[0] * 1000 + to[0] * 100, [from, to]);
+
+  useFrame((state) => {
+    if (!pulseRef.current) return;
+    const speed = live ? 0.55 : 0.3;
+    const t = (state.clock.elapsedTime * speed + hash * 0.00007) % 1;
+    pulseRef.current.position.set(
+      from[0] + (to[0] - from[0]) * t,
+      from[1] + (to[1] - from[1]) * t,
+      from[2] + (to[2] - from[2]) * t,
+    );
+    pulseRef.current.scale.setScalar(0.12);
+  });
+
+  return (
+    <group>
+      <QuadraticBezierLine
+        start={from}
+        mid={[(from[0] + to[0]) / 2, Math.max(from[1], to[1]) + 0.4, 0]}
+        end={to}
+        color="#2de2ff"
+        lineWidth={1.8}
+        transparent
+        opacity={0.12}
+      />
+      <mesh ref={pulseRef}>
+        <sphereGeometry args={[0.07, 8, 8]} />
+        <meshBasicMaterial color="#2fe5ff" transparent opacity={0.4} />
+      </mesh>
+    </group>
+  );
+}
+
+// ---------- CameraRig ----------
 
 function CameraRig({
   cameraPreset,
@@ -318,10 +598,11 @@ function EdgeStream({
   );
 }
 
-function NodeCluster({
+// ---------- NodeAnchor: simplified structural anchor (replaces NodeCluster for key nodes) ----------
+
+function NodeAnchor({
   nodeId,
   label,
-  lane,
   type,
   position,
   intensity,
@@ -332,7 +613,6 @@ function NodeCluster({
 }: {
   nodeId: string;
   label: string;
-  lane: string;
   type: string;
   position: [number, number, number];
   intensity: number;
@@ -342,10 +622,7 @@ function NodeCluster({
   showLabel: boolean;
 }) {
   const groupRef = useRef<THREE.Group>(null);
-  const geometry = useMemo(() => buildClusterGeometry(`${nodeId}:${lane}`, 28, lane === "residual" ? 0.58 : 0.44), [lane, nodeId]);
-  const color = laneColor(lane, type);
   const focusScale = focus === "selected" ? 1.18 : focus === "related" ? 1.08 : 1;
-  const opacity = focus === "muted" ? 0.12 : 0.34 + intensity * 0.46;
 
   useFrame((state) => {
     if (!groupRef.current) return;
@@ -358,12 +635,15 @@ function NodeCluster({
       event.stopPropagation();
       onSelect();
     }}>
-      <points geometry={geometry}>
-        <pointsMaterial color={color} size={0.09 + emphasis * 0.08} transparent opacity={opacity} depthWrite={false} />
-      </points>
       <mesh>
         <sphereGeometry args={[0.09 + intensity * 0.15, 16, 16]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.9 + emphasis * 1.6} transparent opacity={0.7} />
+        <meshStandardMaterial
+          color={type === "logits" || type === "decode" ? "#d7ff63" : "#2fe5ff"}
+          emissive={type === "logits" || type === "decode" ? "#d7ff63" : "#2fe5ff"}
+          emissiveIntensity={0.9 + emphasis * 1.6}
+          transparent
+          opacity={0.7}
+        />
       </mesh>
       {showLabel || type === "decode" || type === "logits" ? (
         <Text
@@ -378,57 +658,6 @@ function NodeCluster({
           {label}
         </Text>
       ) : null}
-    </group>
-  );
-}
-
-function SampleClusterLayer({
-  payload,
-  nodeMap,
-  selection,
-  onSelect,
-}: {
-  payload: QwenFramePayload;
-  nodeMap: Map<string, TraceBundle["graph"]["nodes"][number]>;
-  selection: SelectionState;
-  onSelect(selection: SelectionState): void;
-}) {
-  return (
-    <group>
-      {payload.sampledUnits.map((unit) => {
-        const node = nodeMap.get(unit.nodeId);
-        if (!node) return null;
-        const position = addOffset(node.position, clusterOffset(unit));
-        const focus =
-          selection?.kind === "cluster"
-            ? selection.id === unit.id
-              ? "selected"
-              : selection.id.startsWith(`cluster:${unit.lane}:${unit.block}:`)
-                ? "related"
-                : "muted"
-            : selection?.kind === "node"
-              ? selection.id === unit.nodeId
-                ? "related"
-                : "muted"
-              : "neutral";
-        return (
-          <mesh
-            key={unit.id}
-            position={vectorToTuple(position)}
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelect({ kind: "cluster", id: unit.id });
-            }}
-          >
-            <sphereGeometry args={[0.035 + unit.intensity * 0.06, 10, 10]} />
-            <meshBasicMaterial
-              color={focus === "selected" ? "#d7ff63" : unit.lane === "delta" ? "#ffb85f" : "#2fe5ff"}
-              transparent
-              opacity={focus === "muted" ? 0.1 : 0.25 + unit.intensity * 0.55}
-            />
-          </mesh>
-        );
-      })}
     </group>
   );
 }
@@ -530,6 +759,8 @@ function SelectionHalo({ position }: { position: [number, number, number] }) {
   );
 }
 
+// ---------- SceneOverlay: 2D HTML overlay ----------
+
 function SceneOverlay({
   bundle,
   frame,
@@ -573,8 +804,6 @@ function SceneOverlay({
   const overlayEdges = bundle.graph.edges
     .filter((edge) => edge.type.includes("return") || edge.type === "decode-flow" || edge.type === "residual-flow")
     .slice(0, 120);
-  const overlayUnits =
-    payload?.sampledUnits.filter((unit) => unit.tokenAffinity > 0.36 || Math.abs(unit.block - ((payload.tokenIndex ?? 0) % 24)) < 3) ?? [];
 
   return (
     <div className={`stage-overlay-2d ${live ? "is-live" : ""}`}>
@@ -638,29 +867,6 @@ function SceneOverlay({
           );
         })}
 
-        {overlayUnits.map((unit) => {
-          const node = nodeMap.get(unit.nodeId);
-          if (!node) return null;
-          const projected = project(addOffset(node.position, clusterOffset(unit)));
-          const selected = selection?.kind === "cluster" && selection.id === unit.id;
-          return (
-            <button
-              key={unit.id}
-              type="button"
-              className={selected ? "sample-star is-selected" : "sample-star"}
-              style={
-                {
-                  left: `${projected.left}%`,
-                  top: `${projected.top}%`,
-                  "--sample-size": `${4 + unit.intensity * 6}px`,
-                  "--sample-opacity": `${0.22 + unit.intensity * 0.68}`,
-                } as CSSProperties
-              }
-              onClick={() => onSelect({ kind: "cluster", id: unit.id })}
-            />
-          );
-        })}
-
         {payload?.tokenWindow.map((token, index) => {
           const absoluteIndex = payload.tokenIndex - payload.tokenWindow.length + index + 1;
           const selected = selection?.kind === "token" && selection.id === `token-${absoluteIndex}`;
@@ -684,6 +890,8 @@ function SceneOverlay({
   );
 }
 
+// ---------- Utility functions ----------
+
 function focusForNode(nodeId: string, selection: SelectionState, relatedNodeIds: Set<string>): FocusState {
   if (!selection) return "neutral";
   if (selection.kind === "node" && selection.id === nodeId) return "selected";
@@ -695,15 +903,6 @@ function focusForEdge(edgeId: string, selection: SelectionState, relatedEdgeIds:
   if (!selection) return "neutral";
   if (relatedEdgeIds.has(edgeId)) return "related";
   return "muted";
-}
-
-function laneColor(lane: string, type: string) {
-  if (type === "logits" || type === "decode") return "#d7ff63";
-  if (lane === "delta") return "#ffb85f";
-  if (lane === "attention") return "#2fe5ff";
-  if (lane === "ffn") return "#9fc6ff";
-  if (lane === "embedding") return "#eef2ff";
-  return "#3ce7ff";
 }
 
 function clusterOffset(unit: QwenSampleUnit) {
@@ -721,19 +920,6 @@ function clusterOffset(unit: QwenSampleUnit) {
   };
 }
 
-function buildClusterGeometry(seed: string, count: number, spread: number) {
-  const geometry = new THREE.BufferGeometry();
-  const positions = new Float32Array(count * 3);
-  for (let index = 0; index < count; index++) {
-    const rng = seeded(seed, index + 1);
-    positions[index * 3 + 0] = (rng() - 0.5) * spread;
-    positions[index * 3 + 1] = (rng() - 0.5) * spread;
-    positions[index * 3 + 2] = (rng() - 0.5) * spread * 0.8;
-  }
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  return geometry;
-}
-
 function quadraticPoint(start: [number, number, number], mid: [number, number, number], end: [number, number, number], t: number) {
   const inv = 1 - t;
   return [
@@ -741,14 +927,6 @@ function quadraticPoint(start: [number, number, number], mid: [number, number, n
     inv * inv * start[1] + 2 * inv * t * mid[1] + t * t * end[1],
     inv * inv * start[2] + 2 * inv * t * mid[2] + t * t * end[2],
   ] as [number, number, number];
-}
-
-function seeded(seed: string, salt: number) {
-  let value = hashString(`${seed}:${salt}`) || 1;
-  return () => {
-    value = (value * 1664525 + 1013904223) >>> 0;
-    return value / 4294967295;
-  };
 }
 
 function hashString(value: string) {
@@ -810,4 +988,12 @@ function grainStyle(seed: string, index: number) {
     animationDelay: `${delay}s`,
     transform: `translate(-50%, -50%) scale(${scale})`,
   } satisfies CSSProperties;
+}
+
+function seeded(seed: string, salt: number) {
+  let value = hashString(`${seed}:${salt}`) || 1;
+  return () => {
+    value = (value * 1664525 + 1013904223) >>> 0;
+    return value / 4294967295;
+  };
 }

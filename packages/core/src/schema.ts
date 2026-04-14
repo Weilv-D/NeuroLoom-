@@ -69,10 +69,19 @@ export const graphEdgeSchema = z.object({
   weight: z.number().default(1),
 });
 
+export const neuronDefSchema = z.object({
+  id: z.string(),
+  block: z.number().int().nonnegative(),
+  index: z.number().int().nonnegative(),
+  lane: z.enum(["ffn", "attn_head"]),
+});
+
 export const graphSchema = z.object({
   nodes: z.array(graphNodeSchema).min(1),
   edges: z.array(graphEdgeSchema),
   rootNodeIds: z.array(z.string()).min(1),
+  neurons: z.array(neuronDefSchema).optional(),
+  neuronPositions: z.record(z.tuple([z.number(), z.number(), z.number()])).optional(),
 });
 
 export const metricSchema = z.object({
@@ -89,6 +98,11 @@ export const nodeStateSchema = z.object({
   payloadRef: z.string().optional(),
 });
 
+export const neuronStateSchema = z.object({
+  id: z.string(),
+  activation: z.number(),
+});
+
 export const edgeStateSchema = z.object({
   edgeId: z.string(),
   intensity: z.number(),
@@ -103,6 +117,7 @@ export const frameSchema = z.object({
   phase: z.enum(supportedPhases),
   camera_anchor: z.string(),
   node_states: z.array(nodeStateSchema),
+  neuron_states: z.array(neuronStateSchema).optional(),
   edge_states: z.array(edgeStateSchema),
   metric_refs: z.array(metricSchema),
   payload_refs: z.array(z.string()),

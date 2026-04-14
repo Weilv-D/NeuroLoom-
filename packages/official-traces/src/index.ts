@@ -6,6 +6,10 @@ export const qwenRunnerModelId = "Qwen/Qwen3.5-0.8B";
 export const qwenBlockCount = 24;
 export const qwenHeadGroupCount = 6;
 export const qwenClustersPerLane = 3;
+export const qwenFfnNeuronsPerBlock = 3584;
+export const qwenAttnHeadsPerBlock = 16;
+const ffnGridWidth = 64;
+const ffnGridHeight = 56;
 
 export type OfficialTraceId = (typeof officialTraceIds)[number];
 export type QwenLane = "residual" | "attention" | "delta" | "ffn";
@@ -95,6 +99,7 @@ export type QwenLiveEvent = QwenSessionStartedEvent | QwenTokenStepEvent | QwenS
 type GraphNode = TraceBundle["graph"]["nodes"][number];
 type GraphEdge = TraceBundle["graph"]["edges"][number];
 type PayloadCatalogEntry = TraceBundle["manifest"]["payload_catalog"][number];
+type NeuronDef = { id: string; block: number; index: number; lane: "ffn" | "attn_head" };
 
 const qwenVisualSemantics = {
   positive: "#2fe5ff",
@@ -352,6 +357,8 @@ function buildGraph() {
     node("embedding", "Embedding", "embedding", 1, 0, -12.8, 0, 0, { lane: "embedding", subtype: "token_embed" }),
   ];
   const edges: GraphEdge[] = [edge("prompt-embedding", "prompt", "embedding", "token-flow", 1)];
+  const neurons: NeuronDef[] = [];
+  const neuronPositions: Record<string, [number, number, number]> = {};
 
   for (let block = 0; block < qwenBlockCount; block++) {
     const x = -10.8 + block * 0.98;
@@ -393,6 +400,32 @@ function buildGraph() {
       edge(`delta-return-${block}`, deltaId, block === qwenBlockCount - 1 ? "logits" : blockNodeId("residual", block + 1), "delta-return", 0.72),
       edge(`ffn-return-${block}`, ffnId, block === qwenBlockCount - 1 ? "logits" : blockNodeId("residual", block + 1), "ffn-return", 0.88),
     );
+
+    // FFN neurons: arc star-band layout
+    const ffnRng = seeded(`neurons:${block}`, 42);
+    const ffnCenterX = x + 0.02;
+    const ffnCenterY = -5.2 + wave * 0.25;
+    for (let idx = 0; idx < qwenFfnNeuronsPerBlock; idx++) {
+      const neuronId = `neuron:${block}:${idx}`;
+      const pos = neuronArcPosition(ffnCenterX, ffnCenterY, idx, ffnGridWidth, ffnGridHeight, ffnRng);
+      neurons.push({ id: neuronId, block, index: idx, lane: "ffn" });
+      neuronPositions[neuronId] = pos;
+    }
+
+    // Attention heads: satellite positions (independent RNG)
+    const attnRng = seeded(`attn:${block}`, 7);
+    const attnCenterX = x - 0.04;
+    const attnCenterY = 3.1 + wave;
+    for (let head = 0; head < qwenAttnHeadsPerBlock; head++) {
+      const neuronId = `attn_head:${block}:${head}`;
+      const angle = (head / qwenAttnHeadsPerBlock) * Math.PI * 2 + block * 0.3;
+      const radius = 0.45 + (head % 3) * 0.12;
+      const hx = attnCenterX + Math.cos(angle) * radius + (attnRng() - 0.5) * 0.1;
+      const hy = attnCenterY + Math.sin(angle) * radius * 0.6 + (attnRng() - 0.5) * 0.08;
+      const hz = 0.55 + Math.sin(angle) * radius * 0.3;
+      neurons.push({ id: neuronId, block, index: head, lane: "attn_head" });
+      neuronPositions[neuronId] = [round3(hx), round3(hy), round3(hz)];
+    }
   }
 
   nodes.push(
@@ -405,6 +438,8 @@ function buildGraph() {
     nodes,
     edges,
     rootNodeIds: ["prompt"],
+    neurons,
+    neuronPositions,
   };
 }
 
@@ -417,6 +452,7 @@ function buildFrame(input: {
   graph: TraceBundle["graph"];
 }): TraceFrame {
   const currentBlock = input.payload.tokenIndex % qwenBlockCount;
+  const tokenSeed = hashString(`${input.prompt}:${input.token}:${input.tokenIndex}`);
   const nodeStates = input.graph.nodes.map((graphNode) => {
     if (graphNode.id === "prompt") {
       return nodeState(graphNode.id, 0.28 + input.payload.attentionRow.length * 0.02, 0.55);
@@ -451,6 +487,9 @@ function buildFrame(input: {
     return nodeState(graphNode.id, activation, emphasis);
   });
 
+  // Generate neuron-level activations
+  const neuronStates = buildNeuronStates(input.graph, tokenSeed, currentBlock, input.payload.blockDigest);
+
   const nodeMap = new Map(nodeStates.map((state) => [state.nodeId, state]));
   const edgeStates = input.graph.edges.map((graphEdge) => {
     const source = nodeMap.get(graphEdge.source);
@@ -475,6 +514,7 @@ function buildFrame(input: {
     phase: "decode",
     camera_anchor: input.payload.cameraAnchor,
     node_states: nodeStates,
+    neuron_states: neuronStates,
     edge_states: edgeStates,
     metric_refs: [
       metric("token_index", "Token", input.tokenIndex + 1),
@@ -781,4 +821,84 @@ function round(value: number) {
 
 function round3(value: number) {
   return Number(value.toFixed(3));
+}
+
+function neuronArcPosition(
+  centerX: number,
+  centerY: number,
+  idx: number,
+  gridW: number,
+  gridH: number,
+  rng: () => number,
+): [number, number, number] {
+  const col = idx % gridW;
+  const row = Math.floor(idx / gridW);
+  const u = col / (gridW - 1) - 0.5; // -0.5 to 0.5
+  const v = row / (gridH - 1) - 0.5; // -0.5 to 0.5
+
+  // Elliptical arc distribution
+  const arcRadius = 0.65 + Math.abs(u) * 0.3;
+  const angle = v * Math.PI * 0.85 + u * 0.4;
+  const spreadX = u * 0.48;
+  const spreadY = Math.sin(angle) * arcRadius * 0.55;
+  const spreadZ = Math.cos(angle) * arcRadius * 0.25;
+
+  // Add controlled random jitter for natural star-band feel
+  const jitter = 0.12;
+
+  return [
+    round3(centerX + spreadX + (rng() - 0.5) * jitter),
+    round3(centerY + spreadY + (rng() - 0.5) * jitter * 0.7),
+    round3(spreadZ + (rng() - 0.5) * jitter * 0.5),
+  ];
+}
+
+function buildNeuronStates(
+  graph: TraceBundle["graph"],
+  tokenSeed: number,
+  focusBlock: number,
+  blockDigest: QwenBlockDigest[],
+): { id: string; activation: number }[] {
+  const neurons = graph.neurons;
+  if (!neurons || neurons.length === 0) return [];
+
+  const result: { id: string; activation: number }[] = [];
+  for (let i = 0; i < neurons.length; i++) {
+    const neuron = neurons[i]!;
+    const distance = Math.abs(neuron.block - focusBlock);
+    const focus = Math.exp(-distance / 3.5);
+
+    if (neuron.lane === "ffn") {
+      // Sparse activation: most near 0, few strongly activated
+      const hash = neuronIndexHash(neuron.block, neuron.index);
+      const sparse = Math.abs(Math.sin(hash * 0.00013 + tokenSeed * 0.00007));
+      const isActivated = sparse > 0.88; // ~12% neurons fire
+      const activation = isActivated
+        ? clamp(focus * 0.6 + wave(tokenSeed, neuron.block, hash * 0.001) * 0.35 + 0.15, -1, 1)
+        : clamp(wave(tokenSeed, neuron.block, hash * 0.001) * 0.06, -0.05, 0.08);
+      result.push({ id: neuron.id, activation: round(activation) });
+    } else {
+      // Attention heads: smoother activation
+      const blockAct = blockDigest[neuron.block]?.attention ?? 0.14;
+      const headWave = wave(tokenSeed + neuron.index * 7, neuron.block, neuron.index * 0.31);
+      const activation = clamp(0.1 + focus * blockAct * 0.5 + headWave * 0.25, -1, 1);
+      result.push({ id: neuron.id, activation: round(activation) });
+    }
+  }
+  return result;
+}
+
+function neuronIndexHash(block: number, index: number): number {
+  let h = block * 374761393 + index * 668265263;
+  h = (h ^ (h >>> 13)) * 1274126177;
+  h = h ^ (h >>> 16);
+  return Math.abs(h >>> 0);
+}
+
+function seeded(seed: string, salt: number) {
+  let value = hashString(`${seed}:${salt}`) || 1;
+  return () => {
+    value = (value * 1664525 + 1013904223) >>> 0;
+    return value / 4294967295;
+  };
 }

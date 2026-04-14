@@ -880,8 +880,32 @@ function describeSelection(input: {
   if (!input.selection) {
     return {
       title: "No focus",
-      description: "Click a token, structural block, or star cluster to lock the stage around it.",
+      description: "Click a token, structural block, neuron, or star cluster to lock the stage around it.",
       metrics: [],
+    };
+  }
+
+  if (input.selection.kind === "neuron") {
+    const neuronState = input.frame?.neuron_states?.find((ns) => ns.id === input.selection!.id);
+    const neuronDef = input.bundle?.graph.neurons?.find((n) => n.id === input.selection!.id);
+    const label = neuronDef?.lane === "attn_head"
+      ? `Attention Head ${neuronDef.block + 1}.${neuronDef.index}`
+      : neuronDef
+        ? `Neuron ${neuronDef.block + 1}:${neuronDef.index}`
+        : input.selection.id;
+    return {
+      title: label,
+      description: neuronDef?.lane === "attn_head"
+        ? "An attention head neuron. Its activation reflects the head's contribution to the current token's context mixing."
+        : "A single FFN intermediate neuron. Sparse activations indicate which feature detectors fire for the current token.",
+      metrics: neuronDef
+        ? [
+            { label: "block", value: String(neuronDef.block + 1) },
+            { label: "index", value: String(neuronDef.index) },
+            { label: "lane", value: neuronDef.lane },
+            { label: "activation", value: (neuronState?.activation ?? 0).toFixed(4) },
+          ]
+        : [],
     };
   }
 
