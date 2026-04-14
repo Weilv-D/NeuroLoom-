@@ -89,6 +89,8 @@ By default the runner uses a deterministic synthetic text source so the stage wo
 
 When `NEUROLOOM_BACKEND_URL` is set, the runner now prefers `stream: true` and bridges SSE token deltas into NeuroLoom `token_step` events in real time. Set `NEUROLOOM_BACKEND_STREAM=false` to force buffered adapter mode.
 
+In adapter mode, NeuroLoom keeps its canonical model identity in the UI while remapping live inference requests to `NEUROLOOM_BACKEND_MODEL`. This is required for local backends that expose Qwen under provider-specific IDs such as `qwen3.5:0.8b`.
+
 Environment variables:
 
 - `NEUROLOOM_RUNNER_PORT`

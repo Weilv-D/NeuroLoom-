@@ -15,6 +15,8 @@ NeuroLoom Runner speaks one live protocol to the frontend and can source tokens 
 
 The runner will try to infer the provider from the URL. If that is ambiguous, set `NEUROLOOM_BACKEND_PROVIDER`.
 
+NeuroLoom always presents the canonical profile as `Qwen/Qwen3.5-0.8B`, but in adapter mode the runner can remap that request to a provider-specific model ID through `NEUROLOOM_BACKEND_MODEL`.
+
 ## Environment Variables
 
 - `NEUROLOOM_BACKEND_URL`

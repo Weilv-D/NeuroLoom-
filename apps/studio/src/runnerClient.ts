@@ -8,6 +8,8 @@ export type RunnerHealth = {
   mode: "synthetic" | "adapter";
   model: string;
   backendModel: string;
+  effectiveModel: string;
+  modelRemapped: boolean;
   streaming: boolean;
   backendUrl: string | null;
   backendEndpoint: string | null;
@@ -53,10 +55,14 @@ export type RunnerSession = {
 
 export type SessionStartResponse = {
   id: string;
+  model: string;
   neuroloom: {
     session_id: string;
     websocket_url: string;
     trace_url: string;
+    requested_model: string;
+    effective_model: string;
+    model_remapped: boolean;
   };
 };
 

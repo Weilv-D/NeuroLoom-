@@ -13,8 +13,7 @@ import { WebSocket, WebSocketServer } from "ws";
 
 import { probeBackend } from "./backendProbe.js";
 import { detectBackendProfile, resolveBackendEndpoint } from "./backendProfiles.js";
-
-type RunnerMode = "synthetic" | "adapter";
+import { resolveRuntimeModel, type RunnerMode } from "./modelRouting.js";
 
 type ChatCompletionRequest = {
   model?: string;
@@ -114,11 +113,18 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse) 
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
 
   if (request.method === "GET" && url.pathname === "/health") {
+    const modelResolution = resolveRuntimeModel({
+      backendModel,
+      canonicalModel: qwenRunnerModelId,
+      mode,
+    });
     sendJson(response, 200, {
       ok: true,
       mode,
       model: qwenRunnerModelId,
       backendModel: backendModel,
+      effectiveModel: modelResolution.effectiveModel,
+      modelRemapped: modelResolution.remapped,
       streaming: Boolean(backendUrl) && backendStreamingRequested,
       backendUrl: backendUrl || null,
       backendEndpoint: backendProfile.endpoint,
@@ -153,6 +159,12 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse) 
       sendJson(response, 400, { error: "Expected a user message with text content." });
       return;
     }
+    const modelResolution = resolveRuntimeModel({
+      requestedModel: body.model,
+      backendModel,
+      canonicalModel: qwenRunnerModelId,
+      mode,
+    });
 
     const sessionId = `session-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
     const recorder = new QwenSessionRecorder({ sessionId, prompt });
@@ -178,13 +190,13 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse) 
     session.events.push(startEvent);
     session.status = "live";
     broadcastEvent(session, startEvent);
-    void runSession(session, body);
+    void runSession(session, body, modelResolution.effectiveModel);
 
     sendJson(response, 200, {
       id: `chatcmpl_${sessionId}`,
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
-      model: body.model ?? qwenRunnerModelId,
+      model: modelResolution.effectiveModel,
       choices: [
         {
           index: 0,
@@ -196,6 +208,9 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse) 
         session_id: sessionId,
         websocket_url: `ws://127.0.0.1:${runnerPort}/live/${sessionId}`,
         trace_url: `http://127.0.0.1:${runnerPort}/sessions/${sessionId}/trace`,
+        requested_model: modelResolution.requestedModel,
+        effective_model: modelResolution.effectiveModel,
+        model_remapped: modelResolution.remapped,
       },
     });
     return;
@@ -260,7 +275,7 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse) 
   sendJson(response, 404, { error: "Not found." });
 }
 
-async function runSession(session: SessionRecord, request: ChatCompletionRequest) {
+async function runSession(session: SessionRecord, request: ChatCompletionRequest, effectiveModel: string) {
   try {
     if (!backendUrl) {
       const completionText = buildSyntheticQwenResponse(session.prompt);
@@ -269,7 +284,7 @@ async function runSession(session: SessionRecord, request: ChatCompletionRequest
     }
 
     if (backendStreamingRequested) {
-      const completionText = await streamBackendCompletion(session, request);
+      const completionText = await streamBackendCompletion(session, request, effectiveModel);
       if (!completionText.trim()) {
         throw new Error("Streaming adapter produced an empty completion.");
       }
@@ -279,7 +294,7 @@ async function runSession(session: SessionRecord, request: ChatCompletionRequest
       return;
     }
 
-    const completionText = await resolveBufferedCompletionText(session.prompt, request);
+    const completionText = await resolveBufferedCompletionText(session.prompt, request, effectiveModel);
     await emitCompletionAsTokens(session, completionText, false);
   } catch (error) {
     const reason = session.abortController.signal.aborted ? "cancelled" : "error";
@@ -329,7 +344,7 @@ async function finishSession(session: SessionRecord) {
   broadcastEvent(session, completed);
 }
 
-async function streamBackendCompletion(session: SessionRecord, request: ChatCompletionRequest) {
+async function streamBackendCompletion(session: SessionRecord, request: ChatCompletionRequest, effectiveModel: string) {
   const response = await fetch(resolveBackendEndpoint(backendUrl), {
     method: "POST",
     headers: {
@@ -337,7 +352,7 @@ async function streamBackendCompletion(session: SessionRecord, request: ChatComp
       ...(backendApiKey ? { Authorization: `Bearer ${backendApiKey}` } : {}),
     },
     body: JSON.stringify({
-      model: request.model ?? backendModel,
+      model: effectiveModel,
       messages: request.messages,
       max_tokens: request.max_tokens ?? 160,
       temperature: request.temperature ?? 0.7,
@@ -405,7 +420,7 @@ async function streamBackendCompletion(session: SessionRecord, request: ChatComp
   return completion;
 }
 
-async function resolveBufferedCompletionText(_prompt: string, request: ChatCompletionRequest) {
+async function resolveBufferedCompletionText(_prompt: string, request: ChatCompletionRequest, effectiveModel: string) {
   const endpoint = resolveBackendEndpoint(backendUrl);
   const response = await fetch(endpoint, {
     method: "POST",
@@ -414,7 +429,7 @@ async function resolveBufferedCompletionText(_prompt: string, request: ChatCompl
       ...(backendApiKey ? { Authorization: `Bearer ${backendApiKey}` } : {}),
     },
     body: JSON.stringify({
-      model: request.model ?? backendModel,
+      model: effectiveModel,
       messages: request.messages,
       max_tokens: request.max_tokens ?? 160,
       temperature: request.temperature ?? 0.7,

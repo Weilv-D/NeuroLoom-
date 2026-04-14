@@ -485,6 +485,10 @@ export function App() {
                 <strong>{runnerHealth?.backendModel ?? "fallback replay only"}</strong>
               </div>
               <div>
+                <span>Runtime Model</span>
+                <strong>{runnerHealth?.effectiveModel ?? qwenSampleTrace.model}</strong>
+              </div>
+              <div>
                 <span>Provider</span>
                 <strong>
                   {runnerHealth
@@ -509,6 +513,11 @@ export function App() {
                 <strong>{currentRunnerSession?.status ?? sessionMode}</strong>
               </div>
             </div>
+            {runnerHealth?.modelRemapped ? (
+              <p className="helper-copy">
+                NeuroLoom requested the canonical Qwen profile and remapped it to the configured backend model for live inference.
+              </p>
+            ) : null}
             {runnerHealth?.backendSetupHint ? <p className="helper-copy">{runnerHealth.backendSetupHint}</p> : null}
             {backendProbe ? (
               <div className={backendProbe.ok ? "probe-card" : "probe-card probe-card--error"}>
