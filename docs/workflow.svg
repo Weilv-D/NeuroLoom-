@@ -21,7 +21,7 @@
     </linearGradient>
 
     <!-- Filters -->
-    <filter id="neonGlow" x="-50%" y="-50%" width="200%" height="200%">
+    <filter id="neonGlow" filterUnits="userSpaceOnUse" x="-200" y="-200" width="1400" height="800">
       <feGaussianBlur stdDeviation="8" result="blur1" />
       <feGaussianBlur stdDeviation="15" result="blur2" />
       <feMerge>
@@ -31,7 +31,7 @@
       </feMerge>
     </filter>
 
-    <filter id="glassShadow" x="-20%" y="-20%" width="140%" height="140%">
+    <filter id="glassShadow" x="-40%" y="-40%" width="180%" height="180%">
       <feDropShadow dx="0" dy="15" stdDeviation="20" flood-color="#000000" flood-opacity="0.6"/>
     </filter>
   </defs>
@@ -52,11 +52,11 @@
 
   <!-- Connective Paths -->
   <!-- Main flow paths with glowing animation dots -->
-  <path d="M 280 200 Q 350 200 350 200" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="2" stroke-dasharray="4,4" />
-  <path d="M 650 200 Q 720 200 720 200" fill="none" stroke="url(#glowAccent)" stroke-width="3" filter="url(#neonGlow)" />
+  <path d="M 280 200 L 330 200" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="2" stroke-dasharray="4,4" />
+  <path d="M 630 200 L 680 200" fill="none" stroke="url(#glowAccent)" stroke-width="3" filter="url(#neonGlow)" />
   
-  <circle cx="315" cy="200" r="3" fill="#ffffff" />
-  <circle cx="685" cy="200" r="4" fill="#ffffff" filter="url(#neonGlow)" />
+  <circle cx="305" cy="200" r="3" fill="#ffffff" />
+  <circle cx="655" cy="200" r="4" fill="#ffffff" filter="url(#neonGlow)" />
 
   <g font-family="system-ui, -apple-system, sans-serif">
     
