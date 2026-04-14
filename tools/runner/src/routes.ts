@@ -163,8 +163,8 @@ export async function routeRequest(
       ],
       neuroloom: {
         session_id: sessionId,
-        websocket_url: `ws://127.0.0.1:${store.runnerPort}/live/${sessionId}`,
-        trace_url: `http://127.0.0.1:${store.runnerPort}/sessions/${sessionId}/trace`,
+        websocket_url: `ws://${request.headers.host ?? `127.0.0.1:${store.runnerPort}`}/live/${sessionId}`,
+        trace_url: `http://${request.headers.host ?? `127.0.0.1:${store.runnerPort}`}/sessions/${sessionId}/trace`,
         requested_model: modelResolution.requestedModel,
         effective_model: modelResolution.effectiveModel,
         model_remapped: modelResolution.remapped,

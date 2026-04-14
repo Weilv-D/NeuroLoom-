@@ -30,6 +30,7 @@ export function NeuronField({
     const count = neurons.length;
 
     const posArr = new Float32Array(count * 3);
+    const posXArr = new Float32Array(count); // Store X coords for flow
     const ids: string[] = [];
     const attnArr = new Float32Array(count);
 
@@ -40,6 +41,7 @@ export function NeuronField({
       posArr[i * 3] = pos[0];
       posArr[i * 3 + 1] = pos[1];
       posArr[i * 3 + 2] = pos[2];
+      posXArr[i] = pos[0];
       attnArr[i] = neuron.lane === "attn_head" ? 1.0 : 0.0;
     }
 
@@ -50,7 +52,7 @@ export function NeuronField({
     geo.setAttribute("aIsAttn", new THREE.BufferAttribute(attnArr, 1));
     geo.setAttribute("aSelected", new THREE.BufferAttribute(new Float32Array(count), 1));
 
-    return { geometry: geo, neuronIds: ids };
+    return { geometry: geo, neuronIds: ids, posXArr };
   }, [graph]);
 
   // Build neuron state lookup
@@ -85,24 +87,25 @@ export function NeuronField({
 
     for (let i = 0; i < count; i++) {
       const id = neuronIds[i]!;
-      let activation = neuronStateMap.get(id) ?? 0;
+      let activation = neuronStateMap.get(id) ?? 0.01; // Extremely dim background dark stars
+      const posX = posXArr[i]!;
 
-      // Base starry twinkle and natural breathing
-      const baseShimmer = (Math.sin(time * 1.5 + i * 0.1) * 0.5 + 0.5) * 0.05;
+      // Optical pulse wave sweeping left to right along the Milky Way
+      const sweep = Math.sin(-posX * 0.6 + time * 5.0) * 0.5 + 0.5;
+      const ripple = Math.pow(sweep, 24.0); // Extremely sharp high-intensity light pulse
       
-      // Pulse effect for active points
+      // Starry twinkle (creates organic shimmer across the galaxy)
+      const starryTwinkle = (Math.sin(time * 2.0 + i * 0.1) * 0.5 + 0.5) * 0.08;
+      
+      // Activated paths amplify the light pulse dramatically
       const act = Math.abs(activation);
-      const intensityShimmer = act > 0.1 ? Math.sin(time * 3.0 + i * 0.007) * 0.06 * act : 0;
-      
-      activation = Math.max(activation + intensityShimmer, baseShimmer);
+      let dynamicAct = act + (ripple * 1.5 * Math.max(0.15, act)) + starryTwinkle;
 
-      const absAct = Math.abs(activation);
-      // Make particles varied in size for better parallax
-      const baseSize = 0.008 + (i % 3) * 0.003; 
-      const size = baseSize + absAct * absAct * 0.05;
+      const sizeBase = 0.008 + (i % 6) * 0.003; 
+      const sizeMod = Math.pow(Math.abs(dynamicAct), 1.6) * 0.15; // Pulse causes massive blooming
 
-      sizeAttr.setX(i, size);
-      actAttr.setX(i, activation);
+      sizeAttr.setX(i, sizeBase + sizeMod);
+      actAttr.setX(i, dynamicAct);
     }
 
     sizeAttr.needsUpdate = true;

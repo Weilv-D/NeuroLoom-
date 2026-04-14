@@ -66,33 +66,31 @@ export function buildGraph() {
       edge(`ffn-return-${block}`, ffnId, block === qwenBlockCount - 1 ? "logits" : blockNodeId("residual", block + 1), "ffn-return", 0.88),
     );
 
-    // FFN neurons: galaxy-style nebula distribution
+    // FFN neurons: dense galactic star band (Milky Way)
     const ffnRng = seeded(`neurons:${block}`, 42);
     // Base center for the block
     const ffnCenterX = x + 0.02;
-    const ffnCenterY = -1.0 + waveOffset * 0.25; // Shifted closer to center
+    const ffnCenterY = waveOffset * 0.2;
+    
     for (let idx = 0; idx < qwenFfnNeuronsPerBlock; idx++) {
       const neuronId = `neuron:${block}:${idx}`;
       
-      // Generate spherical/ellipsoid coordinates with focus on a central band
       const u = ffnRng();
       const v = ffnRng();
-      const w = ffnRng();
       
-      // Use power to cluster more points toward the center, but allow far outliers
-      const radius = Math.pow(w, 2.5) * 12.0; 
-      const theta = u * Math.PI * 2.0;
-      const phi = Math.acos(2.0 * v - 1.0);
+      // Galactic disk concentration
+      const radius = Math.pow(u, 2.0) * 11.0; 
+      const angle = v * Math.PI * 2.0 + block * 0.1; 
       
-      // Apply swirl effect based on X (block position) and angle
-      const swirl = (block / qwenBlockCount) * Math.PI * 1.5;
+      // Jitter X massively to stitch blocks together into a continuous star river
+      const xJitter = (ffnRng() - 0.5) * 2.6;
       
-      const nx = radius * Math.sin(phi) * Math.cos(theta + swirl);
-      const ny = radius * Math.cos(phi) * 0.45; // Squashed vertically for galactic disc
-      const nz = radius * Math.sin(phi) * Math.sin(theta + swirl) * 0.8;
+      // Flatten Y to form a disk edge-on, depth in Z
+      const ny = (ffnRng() - 0.5) * 0.4 + Math.sin(angle) * (radius * 0.08); 
+      const nz = Math.cos(angle) * radius;
       
       const pos: [number, number, number] = [
-        round3(ffnCenterX + nx),
+        round3(ffnCenterX + xJitter),
         round3(ffnCenterY + ny),
         round3(nz)
       ];
@@ -100,23 +98,19 @@ export function buildGraph() {
       neuronPositions[neuronId] = pos;
     }
 
-    // Attention heads: orbit the FFN clouds in outer spherical bands
+    // Attention heads: intensely glowing inner core
     const attnRng = seeded(`attn:${block}`, 7);
     for (let head = 0; head < qwenAttnHeadsPerBlock; head++) {
       const neuronId = `attn_head:${block}:${head}`;
       
-      // Orbiting spheres, randomly distributed but generally larger radius
-      const u = attnRng();
-      const v = attnRng();
+      // Core ring
+      const angle = (head / qwenAttnHeadsPerBlock) * Math.PI * 2.0 + block * 0.5;
+      const radius = 0.2 + attnRng() * 0.25;
+      const xJitter = (attnRng() - 0.5) * 0.6;
       
-      // Heads orbit further out like globular clusters
-      const radius = 6.0 + attnRng() * 4.0;
-      const theta = u * Math.PI * 2.0;
-      const phi = Math.acos(2.0 * v - 1.0);
-      
-      const hx = ffnCenterX + radius * Math.sin(phi) * Math.cos(theta);
-      const hy = ffnCenterY + radius * Math.cos(phi) * 0.8;
-      const hz = radius * Math.sin(phi) * Math.sin(theta);
+      const hx = ffnCenterX + xJitter;
+      const hy = ffnCenterY + radius * Math.cos(angle);
+      const hz = radius * Math.sin(angle);
       
       neurons.push({ id: neuronId, block, index: head, lane: "attn_head" });
       neuronPositions[neuronId] = [round3(hx), round3(hy), round3(hz)];

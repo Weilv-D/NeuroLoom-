@@ -83,8 +83,10 @@ wss.on("connection", (socket: WebSocket, _request: IncomingMessage, sessionId: s
   });
 });
 
-server.listen(runnerPort, "127.0.0.1", () => {
-  console.log(`NeuroLoom Runner listening on http://127.0.0.1:${runnerPort} (${mode})`);
+const runnerHost = process.env.NEUROLOOM_RUNNER_HOST ?? "::"; // Listen on both IPv6 and IPv4
+
+server.listen(runnerPort, runnerHost, () => {
+  console.log(`NeuroLoom Runner listening on http://${runnerHost === "::" ? "localhost" : runnerHost}:${runnerPort} (${mode})`);
   if (mode === "adapter") {
     console.log(`Adapter target: ${backendProfile.label} -> ${backendProfile.endpoint}`);
   }
