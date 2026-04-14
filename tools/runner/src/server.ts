@@ -11,6 +11,7 @@ import {
 } from "@neuroloom/official-traces";
 import { WebSocket, WebSocketServer } from "ws";
 
+import { probeBackend } from "./backendProbe.js";
 import { detectBackendProfile, resolveBackendEndpoint } from "./backendProfiles.js";
 
 type RunnerMode = "synthetic" | "adapter";
@@ -127,7 +128,21 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse) 
       backendSetupHint: backendProfile.setupHint,
       sessions: sessions.size,
       liveEndpoint: `/live/:sessionId`,
+      probeEndpoint: `/backend/probe`,
     });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/backend/probe") {
+    sendJson(
+      response,
+      200,
+      await probeBackend({
+        profile: backendProfile,
+        apiKey: backendApiKey,
+        targetModel: backendModel,
+      }),
+    );
     return;
   }
 

@@ -76,3 +76,5 @@ vLLM should already be serving an OpenAI-compatible endpoint for `Qwen/Qwen3.5-0
 - `backendSetupHint`
 
 The frontend reads those fields and shows the active provider directly in the session panel.
+
+`GET /backend/probe` performs an active reachability check against the configured backend, resolves the corresponding models endpoint, and reports the first few model IDs. The frontend uses it for the `Probe Backend` action.

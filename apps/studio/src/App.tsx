@@ -10,11 +10,13 @@ import { startTransition, useEffect, useId, useMemo, useRef, useState } from "re
 
 import { SceneCanvas } from "./SceneCanvas";
 import {
+  type BackendProbe,
   cancelRunnerSession,
   checkRunnerHealth,
   connectToSession,
   downloadTraceFromRunner,
   listRunnerSessions,
+  probeRunnerBackend,
   startChatSession,
   type RunnerHealth,
   type RunnerSession,
@@ -42,6 +44,7 @@ export function App() {
   const [runnerHealth, setRunnerHealth] = useState<RunnerHealth | null>(null);
   const [runnerChecked, setRunnerChecked] = useState(false);
   const [runnerSessions, setRunnerSessions] = useState<RunnerSession[]>([]);
+  const [backendProbe, setBackendProbe] = useState<BackendProbe | null>(null);
   const [sessionMode, setSessionMode] = useState<SessionMode>("sample");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [traceUrl, setTraceUrl] = useState<string | null>(null);
@@ -56,29 +59,30 @@ export function App() {
     liveFollowRef.current = liveFollow;
   }, [liveFollow]);
 
+  async function refreshRunnerStatus(options?: { includeProbe?: boolean }) {
+    const includeProbe = options?.includeProbe ?? true;
+    const health = await checkRunnerHealth();
+    setRunnerHealth(health);
+    setRunnerChecked(true);
+
+    try {
+      setRunnerSessions(await listRunnerSessions());
+    } catch {
+      setRunnerSessions([]);
+    }
+
+    if (includeProbe && health?.mode === "adapter") {
+      setBackendProbe(await probeRunnerBackend());
+      return;
+    }
+
+    if (!health || health.mode !== "adapter") {
+      setBackendProbe(null);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
-
-    async function refreshRunnerHealth() {
-      const health = await checkRunnerHealth();
-      if (!cancelled) {
-        setRunnerHealth(health);
-        setRunnerChecked(true);
-      }
-    }
-
-    async function refreshRunnerSessions() {
-      try {
-        const sessions = await listRunnerSessions();
-        if (!cancelled) {
-          setRunnerSessions(sessions);
-        }
-      } catch {
-        if (!cancelled) {
-          setRunnerSessions([]);
-        }
-      }
-    }
 
     async function boot() {
       setLoadingLabel("Loading the official Qwen replay…");
@@ -99,14 +103,16 @@ export function App() {
           setLoadingLabel(null);
         }
       }
-      await refreshRunnerHealth();
-      await refreshRunnerSessions();
+      if (!cancelled) {
+        await refreshRunnerStatus();
+      }
     }
 
     void boot();
     const healthInterval = window.setInterval(() => {
-      void refreshRunnerHealth();
-      void refreshRunnerSessions();
+      if (!cancelled) {
+        void refreshRunnerStatus({ includeProbe: false });
+      }
     }, 10_000);
 
     return () => {
@@ -440,21 +446,16 @@ export function App() {
                 <button type="button" className="secondary-button" onClick={() => void loadSampleReplay()}>
                   Load Demo Replay
                 </button>
+                <button type="button" className="secondary-button" onClick={() => void refreshRunnerStatus()}>
+                  Refresh Runner
+                </button>
                 <button
                   type="button"
                   className="secondary-button"
-                  onClick={async () => {
-                    const health = await checkRunnerHealth();
-                    setRunnerHealth(health);
-                    setRunnerChecked(true);
-                    try {
-                      setRunnerSessions(await listRunnerSessions());
-                    } catch {
-                      setRunnerSessions([]);
-                    }
-                  }}
+                  onClick={async () => setBackendProbe(await probeRunnerBackend())}
+                  disabled={!runnerHealth || runnerHealth.mode !== "adapter"}
                 >
-                  Refresh Runner
+                  Probe Backend
                 </button>
                 <button
                   type="button"
@@ -509,6 +510,41 @@ export function App() {
               </div>
             </div>
             {runnerHealth?.backendSetupHint ? <p className="helper-copy">{runnerHealth.backendSetupHint}</p> : null}
+            {backendProbe ? (
+              <div className={backendProbe.ok ? "probe-card" : "probe-card probe-card--error"}>
+                <div className="card-heading">
+                  <p className="eyebrow">Backend Probe</p>
+                  <span>{new Date(backendProbe.checkedAt).toLocaleTimeString()}</span>
+                </div>
+                <div className="probe-grid">
+                  <div>
+                    <span>Reachable</span>
+                    <strong>{backendProbe.reachable ? "yes" : "no"}</strong>
+                  </div>
+                  <div>
+                    <span>Model Match</span>
+                    <strong>{backendProbe.matchedModel ? "yes" : "no"}</strong>
+                  </div>
+                  <div>
+                    <span>Target Model</span>
+                    <strong>{backendProbe.targetModel}</strong>
+                  </div>
+                  <div>
+                    <span>Models Endpoint</span>
+                    <strong>{backendProbe.modelsEndpoint ?? "not required"}</strong>
+                  </div>
+                </div>
+                <p className="helper-copy">{backendProbe.error ?? backendProbe.hint}</p>
+                <div className="probe-models">
+                  {backendProbe.models.length === 0 ? <span className="empty-state">No model list reported.</span> : null}
+                  {backendProbe.models.slice(0, 6).map((modelId) => (
+                    <span key={modelId} className="token-pill">
+                      {modelId}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {error ? <p className="error-text">{error}</p> : null}
             {loadingLabel ? <p className="loading-text">{loadingLabel}</p> : null}
           </section>

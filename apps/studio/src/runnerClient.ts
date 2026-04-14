@@ -17,6 +17,23 @@ export type RunnerHealth = {
   backendSetupHint: string;
   sessions: number;
   liveEndpoint: string;
+  probeEndpoint: string;
+};
+
+export type BackendProbe = {
+  ok: boolean;
+  provider: "synthetic" | "lmstudio" | "ollama" | "vllm" | "custom";
+  label: string;
+  checkedAt: number;
+  targetModel: string;
+  matchedModel: boolean;
+  reachable: boolean;
+  endpoint: string | null;
+  modelsEndpoint: string | null;
+  models: string[];
+  statusCode: number | null;
+  error: string | null;
+  hint: string;
 };
 
 export type RunnerSession = {
@@ -48,6 +65,16 @@ export async function checkRunnerHealth(): Promise<RunnerHealth | null> {
     const response = await fetch(`${defaultRunnerUrl}/health`);
     if (!response.ok) return null;
     return (await response.json()) as RunnerHealth;
+  } catch {
+    return null;
+  }
+}
+
+export async function probeRunnerBackend(): Promise<BackendProbe | null> {
+  try {
+    const response = await fetch(`${defaultRunnerUrl}/backend/probe`);
+    if (!response.ok) return null;
+    return (await response.json()) as BackendProbe;
   } catch {
     return null;
   }

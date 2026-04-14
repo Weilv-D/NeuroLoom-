@@ -76,6 +76,8 @@ Endpoints:
   Lists recent runner sessions and whether replay export is ready.
 - `POST /sessions/:sessionId/cancel`
   Stops a live session and seals a partial replay.
+- `GET /backend/probe`
+  Verifies whether the configured backend is reachable and lists the models it reports.
 - `WS /live/:sessionId`
   Streams `session_started`, `token_step`, and `session_completed`.
 - `GET /sessions/:sessionId/trace`
