@@ -24,7 +24,7 @@ export function NeuronField({
   const pointsRef = useRef<THREE.Points>(null);
 
   // Build geometry once when graph changes
-  const { geometry, neuronIds } = useMemo(() => {
+  const { geometry, neuronIds, posXArr } = useMemo(() => {
     const neurons = graph.neurons ?? [];
     const positions = graph.neuronPositions ?? {};
     const count = neurons.length;
@@ -47,8 +47,14 @@ export function NeuronField({
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(posArr, 3));
-    geo.setAttribute("aSize", new THREE.BufferAttribute(new Float32Array(count), 1));
-    geo.setAttribute("aActivation", new THREE.BufferAttribute(new Float32Array(count), 1));
+    
+    // Static attributes
+    const indexArr = new Float32Array(count);
+    for (let i = 0; i < count; i++) indexArr[i] = i;
+    geo.setAttribute("aIndex", new THREE.BufferAttribute(indexArr, 1));
+    
+    // Dynamic attributes, mapped by React per frame
+    geo.setAttribute("aBaseActivation", new THREE.BufferAttribute(new Float32Array(count), 1));
     geo.setAttribute("aIsAttn", new THREE.BufferAttribute(attnArr, 1));
     geo.setAttribute("aSelected", new THREE.BufferAttribute(new Float32Array(count), 1));
 
@@ -77,44 +83,23 @@ export function NeuronField({
     selAttr.needsUpdate = true;
   }, [geometry, neuronIds, selectedId]);
 
-  // Per-frame update of size and activation buffers (dynamic)
-  useFrame((state) => {
+  // Update base activation array only when state frame changes (not every single 60fps tick)
+  useMemo(() => {
     const count = neuronIds.length;
-    const sizeAttr = geometry.getAttribute("aSize") as THREE.BufferAttribute;
-    const actAttr = geometry.getAttribute("aActivation") as THREE.BufferAttribute;
-
-    const time = state.clock.elapsedTime;
-
+    const baseActAttr = geometry.getAttribute("aBaseActivation") as THREE.BufferAttribute;
     for (let i = 0; i < count; i++) {
       const id = neuronIds[i]!;
-      let activation = neuronStateMap.get(id) ?? 0.01; // Extremely dim background dark stars
-      const posX = posXArr[i]!;
-
-      // Optical pulse wave sweeping left to right along the Milky Way
-      const sweep = Math.sin(-posX * 0.6 + time * 5.0) * 0.5 + 0.5;
-      const ripple = Math.pow(sweep, 24.0); // Extremely sharp high-intensity light pulse
-      
-      // Starry twinkle (creates organic shimmer across the galaxy)
-      const starryTwinkle = (Math.sin(time * 2.0 + i * 0.1) * 0.5 + 0.5) * 0.08;
-      
-      // Activated paths amplify the light pulse dramatically
-      const act = Math.abs(activation);
-      let dynamicAct = act + (ripple * 1.5 * Math.max(0.15, act)) + starryTwinkle;
-
-      const sizeBase = 0.008 + (i % 6) * 0.003; 
-      const sizeMod = Math.pow(Math.abs(dynamicAct), 1.6) * 0.15; // Pulse causes massive blooming
-
-      sizeAttr.setX(i, sizeBase + sizeMod);
-      actAttr.setX(i, dynamicAct);
+      baseActAttr.setX(i, neuronStateMap.get(id) ?? 0.005); // Base void state
     }
-
-    sizeAttr.needsUpdate = true;
-    actAttr.needsUpdate = true;
-  });
+    baseActAttr.needsUpdate = true;
+  }, [geometry, neuronIds, neuronStateMap]);
 
   const material = useMemo(
     () =>
       new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0.0 },
+        },
         vertexShader: neuronVertexShader,
         fragmentShader: neuronFragmentShader,
         transparent: true,
@@ -123,6 +108,11 @@ export function NeuronField({
       }),
     [],
   );
+
+  // Per-frame update just shifts the uniform time limitlessly
+  useFrame((state) => {
+    material.uniforms.uTime.value = state.clock.elapsedTime;
+  });
 
   return (
     <points

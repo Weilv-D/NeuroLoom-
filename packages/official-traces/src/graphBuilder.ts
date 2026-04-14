@@ -66,28 +66,38 @@ export function buildGraph() {
       edge(`ffn-return-${block}`, ffnId, block === qwenBlockCount - 1 ? "logits" : blockNodeId("residual", block + 1), "ffn-return", 0.88),
     );
 
-    // FFN neurons: dense galactic star band (Milky Way)
+    // FFN neurons: natural Gaussian ring (Torus) galaxy transitioning smoothly into sparse space
     const ffnRng = seeded(`neurons:${block}`, 42);
-    // Base center for the block
-    const ffnCenterX = x + 0.02;
-    const ffnCenterY = waveOffset * 0.2;
+    const ffnCenterX = x + 0.05;
+    const ffnCenterY = Math.sin(block * 0.2) * 0.2;
     
     for (let idx = 0; idx < qwenFfnNeuronsPerBlock; idx++) {
       const neuronId = `neuron:${block}:${idx}`;
       
-      const u = ffnRng();
-      const v = ffnRng();
+      // Box-Muller transform for natural Gaussian distribution (no harsh square edges)
+      const u1 = Math.max(ffnRng(), 0.00001);
+      const u2 = ffnRng();
+      const g1 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2); // Gaussian X
+      const g2 = Math.sqrt(-2.0 * Math.log(u1)) * Math.sin(2.0 * Math.PI * u2); // Gaussian Y
+      const g3 = Math.sqrt(-2.0 * Math.log(Math.max(ffnRng(), 0.00001))) * Math.cos(2.0 * Math.PI * ffnRng()); // Gaussian Z
+
+      // Create a majestic elliptical ring
+      // ringRadius pulls the dense core out from the absolute center, creating a visible "hole" or "ring"
+      const ringRadius = 2.8; 
       
-      // Galactic disk concentration
-      const radius = Math.pow(u, 2.0) * 11.0; 
-      const angle = v * Math.PI * 2.0 + block * 0.1; 
+      // angle around the Z-Y plane (the face of the ring)
+      const angle = ffnRng() * Math.PI * 2.0;
+
+      // X jitter using pure Gaussian so blocks merge organically without looking like stacked boxes
+      const xJitter = g1 * 0.65;
       
-      // Jitter X massively to stitch blocks together into a continuous star river
-      const xJitter = (ffnRng() - 0.5) * 2.6;
+      // Thickness of the ring spreads out naturally using Gaussian noise
+      // Squashed Y creates an elliptical/galactic disk orientation
+      const ySpread = g2 * 0.45;
+      const zSpread = g3 * 1.5;
       
-      // Flatten Y to form a disk edge-on, depth in Z
-      const ny = (ffnRng() - 0.5) * 0.4 + Math.sin(angle) * (radius * 0.08); 
-      const nz = Math.cos(angle) * radius;
+      const ny = Math.sin(angle) * ringRadius * 0.35 + ySpread;
+      const nz = Math.cos(angle) * ringRadius * 1.0 + zSpread;
       
       const pos: [number, number, number] = [
         round3(ffnCenterX + xJitter),
@@ -98,19 +108,18 @@ export function buildGraph() {
       neuronPositions[neuronId] = pos;
     }
 
-    // Attention heads: intensely glowing inner core
+    // Attention heads: glowing orbital nodes around the ring
     const attnRng = seeded(`attn:${block}`, 7);
     for (let head = 0; head < qwenAttnHeadsPerBlock; head++) {
       const neuronId = `attn_head:${block}:${head}`;
       
-      // Core ring
       const angle = (head / qwenAttnHeadsPerBlock) * Math.PI * 2.0 + block * 0.5;
-      const radius = 0.2 + attnRng() * 0.25;
-      const xJitter = (attnRng() - 0.5) * 0.6;
+      const radius = 4.5 + attnRng() * 1.5;
+      const xJitter = (attnRng() - 0.5) * 1.2;
       
       const hx = ffnCenterX + xJitter;
-      const hy = ffnCenterY + radius * Math.cos(angle);
-      const hz = radius * Math.sin(angle);
+      const hy = ffnCenterY + radius * Math.sin(angle) * 0.45;
+      const hz = radius * Math.cos(angle) * 1.2;
       
       neurons.push({ id: neuronId, block, index: head, lane: "attn_head" });
       neuronPositions[neuronId] = [round3(hx), round3(hy), round3(hz)];
