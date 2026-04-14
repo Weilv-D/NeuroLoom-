@@ -60,6 +60,14 @@ Run the local live runner in another terminal:
 pnpm dev:runner
 ```
 
+Or start it with a backend profile already loaded:
+
+```bash
+pnpm dev:runner:lmstudio
+pnpm dev:runner:ollama
+pnpm dev:runner:vllm
+```
+
 Then open `http://localhost:5173`.
 
 If the runner is not available, the app falls back to the official replay bundle.
@@ -147,6 +155,12 @@ pnpm generate:traces
 pnpm validate:samples
 pnpm dev
 pnpm dev:runner
+pnpm dev:runner:lmstudio
+pnpm dev:runner:ollama
+pnpm dev:runner:vllm
+pnpm doctor:runner:lmstudio
+pnpm doctor:runner:ollama
+pnpm doctor:runner:vllm
 pnpm build
 pnpm test
 pnpm test:visual

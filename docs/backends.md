@@ -42,6 +42,13 @@ pnpm dev:runner
 
 LM Studio should expose its OpenAI-compatible local server before NeuroLoom starts.
 
+Quick start:
+
+```bash
+pnpm dev:runner:lmstudio
+pnpm doctor:runner:lmstudio
+```
+
 ## Ollama
 
 Example env:
@@ -54,6 +61,13 @@ pnpm dev:runner
 
 Make sure the Qwen model is available to Ollama first.
 
+Quick start:
+
+```bash
+pnpm dev:runner:ollama
+pnpm doctor:runner:ollama
+```
+
 ## vLLM
 
 Example env:
@@ -65,6 +79,26 @@ pnpm dev:runner
 ```
 
 vLLM should already be serving an OpenAI-compatible endpoint for `Qwen/Qwen3.5-0.8B`.
+
+Quick start:
+
+```bash
+pnpm dev:runner:vllm
+pnpm doctor:runner:vllm
+```
+
+## Profile Scripts
+
+The runner now ships profile-aware launchers and doctor commands:
+
+- `pnpm dev:runner:lmstudio`
+- `pnpm dev:runner:ollama`
+- `pnpm dev:runner:vllm`
+- `pnpm doctor:runner:lmstudio`
+- `pnpm doctor:runner:ollama`
+- `pnpm doctor:runner:vllm`
+
+The `dev:runner:*` commands load the matching example env file and start the runner with those defaults. Shell `NEUROLOOM_*` variables still override the bundled profile values.
 
 ## Health Surface
 

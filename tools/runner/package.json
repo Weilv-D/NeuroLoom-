@@ -5,8 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:lmstudio": "tsx scripts/start-profile.ts lmstudio",
+    "dev:ollama": "tsx scripts/start-profile.ts ollama",
+    "dev:vllm": "tsx scripts/start-profile.ts vllm",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
+    "start:lmstudio": "tsx scripts/start-profile.ts lmstudio --start",
+    "start:ollama": "tsx scripts/start-profile.ts ollama --start",
+    "start:vllm": "tsx scripts/start-profile.ts vllm --start",
+    "doctor:lmstudio": "tsx scripts/doctor.ts lmstudio",
+    "doctor:ollama": "tsx scripts/doctor.ts ollama",
+    "doctor:vllm": "tsx scripts/doctor.ts vllm",
     "test": "tsx --test test/**/*.test.ts"
   },
   "dependencies": {

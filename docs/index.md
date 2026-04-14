@@ -27,6 +27,8 @@ pnpm install
 pnpm generate:traces
 pnpm dev
 pnpm dev:runner
+pnpm dev:runner:ollama
+pnpm doctor:runner:ollama
 pnpm build
 pnpm test
 pnpm validate:samples
